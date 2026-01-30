@@ -97,13 +97,14 @@ class Agent {
     const parsedSafe = parsedInfo.data || {};
 
     const summary = String(parsedSafe.summary || "");
+    const thinking = String(parsedSafe.thinking || parsedSafe.thoughts || "");
     const plan = parsedSafe.plan || [];
     const commands = parsedSafe.commands || [];
     let pythonScript = this.normalizeScript(parsedSafe.python_script || parsedSafe.pythonScript || "");
     const journal = typeof parsedSafe.journal === "object" && parsedSafe.journal ? parsedSafe.journal : {};
-    let what = String(journal.what || "");
-    let why = String(journal.why || "");
-    let learnings = String(journal.learnings || "");
+    let nowWork = String(journal.now_work || "");
+    let outcomes = String(journal.outcomes || "");
+    let nextPlan = String(journal.next_plan || "");
 
     let nextSleep = parsedSafe.next_sleep_seconds || this.config.loopSleepSeconds;
     nextSleep = Number.isFinite(Number(nextSleep)) ? Number(nextSleep) : this.config.loopSleepSeconds;
@@ -116,7 +117,7 @@ class Agent {
 
     const rawText = String(rawResponse || "").trim();
     const cleanedText = String(cleanedInfo.cleaned || "").trim();
-    const missingJournal = !String(what).trim() || !String(why).trim() || !String(learnings).trim();
+    const missingJournal = !String(nowWork).trim() || !String(outcomes).trim() || !String(nextPlan).trim();
     if (!parsedInfo.data || missingJournal || llmError) {
       this.logger?.warn("llm.output.invalid", {
         parsed: Boolean(parsedInfo.data),
@@ -180,7 +181,7 @@ class Agent {
     }
     this.writeCommands(commandResults);
 
-    const { filePath, entry } = this.journal.appendEntry(what, why, learnings);
+    const { filePath, entry } = this.journal.appendEntry(nowWork, outcomes, nextPlan);
     fs.writeFileSync(this.lastJournalPath, entry, "utf8");
 
     fs.writeFileSync(
@@ -188,10 +189,11 @@ class Agent {
       JSON.stringify(
         {
           summary,
+          thinking,
           plan: planLines,
           commands: commandList,
           python_script: pythonScript,
-          journal: { what, why, learnings },
+          journal: { now_work: nowWork, outcomes, next_plan: nextPlan },
           raw: rawResponse,
           raw_cleaned: cleanedText,
           error: llmError

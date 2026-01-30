@@ -15,21 +15,21 @@ class Journal {
     ensureDir(journalDir);
   }
 
-  appendEntry(what, why, learnings) {
+  appendEntry(nowWork, outcomes, nextPlan) {
     const now = new Date();
     const day = now.toISOString().slice(0, 10);
     const time = now.toISOString().slice(11, 19) + " UTC";
     const entry = [
       `## ${time}`,
       "",
-      "**What I Did**",
-      String(what || "").trim(),
+      "**正在进行的工作**",
+      String(nowWork || "").trim(),
       "",
-      "**Why I Did It**",
-      String(why || "").trim(),
+      "**达成的成果**",
+      String(outcomes || "").trim(),
       "",
-      "**What I Learned**",
-      String(learnings || "").trim(),
+      "**下一步计划**",
+      String(nextPlan || "").trim(),
       "",
       ""
     ].join("\n");

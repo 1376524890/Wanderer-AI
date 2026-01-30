@@ -8,15 +8,15 @@
 const fs = require("fs");
 const path = require("path");
 const blessed = require("blessed");
-const { readTail } = require("./utils");
+const { readTail, safeJsonExtract, truncate } = require("./utils");
 
 class Monitor {
   constructor(config) {
     this.config = config;
     this.statusPath = path.join(config.stateDir, "status.json");
-    this.lastJournalPath = path.join(config.stateDir, "last_journal_entry.md");
     this.lastCommandsPath = path.join(config.stateDir, "last_commands.md");
     this.commandStreamPath = path.join(config.stateDir, "command_stream.log");
+    this.lastResponsePath = path.join(config.stateDir, "last_response.json");
     this.startTime = Date.now();
   }
 
@@ -29,9 +29,8 @@ class Monitor {
     });
 
     const labels = {
-      journal: "Journal",
-      status: "Status",
-      commands: "Live Commands",
+      thinking: "思考过程",
+      actions: "采取的措施",
       footer: "Keys: q to quit | Ctrl+C to quit"
     };
 
@@ -45,13 +44,13 @@ class Monitor {
       style: { border: { fg: "cyan" } }
     });
 
-    const journalBox = blessed.box({
+    const thinkingBox = blessed.box({
       parent: screen,
       top: 3,
       left: 0,
-      width: "70%",
+      width: "65%",
       height: "100%-6",
-      label: labels.journal,
+      label: labels.thinking,
       border: "line",
       scrollable: true,
       alwaysScroll: true,
@@ -59,25 +58,13 @@ class Monitor {
       style: { border: { fg: "cyan" }, label: { fg: "cyan" } }
     });
 
-    const statusBox = blessed.box({
+    const actionBox = blessed.box({
       parent: screen,
       top: 3,
-      left: "70%",
-      width: "30%",
-      height: "40%",
-      label: labels.status,
-      border: "line",
-      tags: false,
-      style: { border: { fg: "cyan" }, label: { fg: "cyan" } }
-    });
-
-    const commandBox = blessed.box({
-      parent: screen,
-      top: "43%",
-      left: "70%",
-      width: "30%",
-      height: "100%-46%",
-      label: labels.commands,
+      left: "65%",
+      width: "35%",
+      height: "100%-6",
+      label: labels.actions,
       border: "line",
       scrollable: true,
       alwaysScroll: true,
@@ -96,11 +83,13 @@ class Monitor {
     });
 
     const render = () => {
-      header.setContent(this.renderHeader());
-      statusBox.setContent(this.renderStatus());
-      journalBox.setContent(readTail(this.lastJournalPath, 5000) || "(no journal)");
+      const status = this.loadStatus();
+      const response = this.loadResponse();
       const live = readTail(this.commandStreamPath, 12000);
-      commandBox.setContent(live || readTail(this.lastCommandsPath, 4000) || "(no commands)");
+      const lastCommands = readTail(this.lastCommandsPath, 4000);
+      header.setContent(this.renderHeader(status));
+      thinkingBox.setContent(this.renderThinking(response));
+      actionBox.setContent(this.renderActions(response, status, live, lastCommands));
       footer.setContent(labels.footer);
       screen.render();
     };
@@ -114,27 +103,16 @@ class Monitor {
     });
   }
 
-  renderHeader() {
+  renderHeader(status) {
     const uptime = Math.floor((Date.now() - this.startTime) / 1000);
     const hours = Math.floor(uptime / 3600);
     const minutes = Math.floor((uptime % 3600) / 60);
     const seconds = uptime % 60;
     const uptimeText = `${hours}h ${minutes}m ${seconds}s`;
-    return ` Wanderer AI | Claude-style Monitor | Uptime: ${uptimeText}`;
-  }
-
-  renderStatus() {
-    const data = this.loadStatus();
-    const lines = [
-      `Cycle: ${data.cycle ?? "-"}`,
-      `Last run: ${data.last_run_at ?? "-"}`,
-      `Sleep: ${data.sleep_seconds ?? "-"}s`,
-      `Summary: ${data.last_summary ?? ""}`
-    ];
-    if (data.last_error) {
-      lines.push(`Error: ${data.last_error}`);
-    }
-    return lines.join("\n");
+    const cycle = status && status.cycle !== undefined ? status.cycle : "-";
+    const lastRun = status && status.last_run_at ? status.last_run_at : "-";
+    const sleep = status && status.sleep_seconds !== undefined ? `${status.sleep_seconds}s` : "-";
+    return ` Wanderer AI | Uptime: ${uptimeText} | Cycle: ${cycle} | Last: ${lastRun} | Sleep: ${sleep}`;
   }
 
   loadStatus() {
@@ -145,6 +123,132 @@ class Monitor {
     } catch (err) {
       return {};
     }
+  }
+
+  loadResponse() {
+    if (!fs.existsSync(this.lastResponsePath)) return {};
+    try {
+      const raw = fs.readFileSync(this.lastResponsePath, "utf8");
+      return safeJsonExtract(raw) || {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  renderThinking(response) {
+    const lines = [];
+    const summary = String(response.summary || "").trim();
+    const thinking = String(response.thinking || response.thoughts || "").trim();
+    const journal = response.journal && typeof response.journal === "object" ? response.journal : {};
+    const outcomes = String(journal.outcomes || "").trim();
+    const nextPlan = String(journal.next_plan || "").trim();
+    const plan = this.normalizeList(response.plan);
+
+    if (summary) {
+      lines.push("【当前总结】", summary, "");
+    }
+    if (thinking) {
+      lines.push("【思考摘要】", thinking, "");
+    }
+    if (outcomes) {
+      lines.push("【达成的成果】", outcomes, "");
+    }
+    if (plan.length) {
+      lines.push("【计划】");
+      plan.forEach((item, index) => {
+        lines.push(`${index + 1}. ${item}`);
+      });
+      lines.push("");
+    }
+    if (nextPlan) {
+      lines.push("【下一步计划】", nextPlan, "");
+    }
+
+    if (!lines.length) return "(暂无思考内容)";
+    return lines.join("\n");
+  }
+
+  renderActions(response, status, live, lastCommands) {
+    const lines = [];
+    const journal = response.journal && typeof response.journal === "object" ? response.journal : {};
+    const nowWork = String(journal.now_work || "").trim();
+    const commands = this.normalizeList(response.commands);
+    const pythonScript = String(response.python_script || "").trim();
+    const summary = String(response.summary || "").trim();
+    const output = live || lastCommands || "";
+
+    lines.push("【运行状态】");
+    lines.push(`Cycle: ${status.cycle ?? "-"}`);
+    lines.push(`Last run: ${status.last_run_at ?? "-"}`);
+    lines.push(`Sleep: ${status.sleep_seconds ?? "-"}s`);
+    if (status.last_error) {
+      lines.push(`Error: ${status.last_error}`);
+    }
+    if (summary) {
+      lines.push(`Summary: ${summary}`);
+    }
+    lines.push("");
+
+    if (nowWork) {
+      lines.push("【正在进行的工作】", nowWork, "");
+    }
+
+    lines.push("【命令清单】");
+    if (commands.length) {
+      commands.forEach((item) => lines.push(`- ${item}`));
+    } else {
+      lines.push("(未生成 commands)");
+    }
+    lines.push("");
+
+    if (pythonScript) {
+      lines.push("【python_script】");
+      lines.push(truncate(pythonScript, 2000));
+      lines.push("");
+    }
+
+    lines.push("【命令输出】");
+    if (output) {
+      lines.push(output);
+    } else {
+      lines.push("(暂无实时输出)");
+      const hints = this.commandOutputHints(commands, pythonScript);
+      if (hints.length) {
+        hints.forEach((hint) => lines.push(`- ${hint}`));
+      }
+    }
+
+    return lines.join("\n");
+  }
+
+  commandOutputHints(commands, pythonScript) {
+    const hints = [];
+    if (!this.config.allowCommandExecution) {
+      hints.push("ALLOW_COMMAND_EXECUTION=false，命令执行被禁用");
+    }
+    if (!commands.length) {
+      hints.push("本轮未生成 commands 列表");
+    }
+    if (!pythonScript) {
+      hints.push("本轮未生成 python_script");
+    }
+    if (!this.config.allowUnsafeCommands && !commands.length) {
+      hints.push("ALLOW_UNSAFE_COMMANDS=false 时必须提供 commands 列表");
+    }
+    if (!this.config.allowUnsafeCommands && !this.config.commandAllowlist.length) {
+      hints.push("COMMAND_ALLOWLIST 为空，所有命令会被拦截");
+    }
+    return hints;
+  }
+
+  normalizeList(value) {
+    if (Array.isArray(value)) {
+      return value.map((item) => String(item).trim()).filter(Boolean);
+    }
+    if (typeof value === "string" && value.trim()) {
+      return [value.trim()];
+    }
+    return [];
   }
 }
 
