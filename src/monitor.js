@@ -112,7 +112,21 @@ class Monitor {
     const cycle = status && status.cycle !== undefined ? status.cycle : "-";
     const lastRun = status && status.last_run_at ? status.last_run_at : "-";
     const sleep = status && status.sleep_seconds !== undefined ? `${status.sleep_seconds}s` : "-";
-    return ` Wanderer AI | Uptime: ${uptimeText} | Cycle: ${cycle} | Last: ${lastRun} | Sleep: ${sleep}`;
+    const tokenStats = status && status.token_stats ? status.token_stats : null;
+    const totalTokens = tokenStats && tokenStats.total_tokens !== undefined ? tokenStats.total_tokens : 0;
+    const requests = tokenStats && tokenStats.requests !== undefined ? tokenStats.requests : 0;
+    const tokenInfo = requests > 0 ? `| Tokens: ${this.formatNumber(totalTokens)} (${requests} req)` : "";
+    return ` Wanderer AI | Uptime: ${uptimeText} | Cycle: ${cycle} | Last: ${lastRun} | Sleep: ${sleep} ${tokenInfo}`;
+  }
+
+  formatNumber(num) {
+    if (num >= 1000000) {
+      return `${(num / 1000000).toFixed(1)}M`;
+    }
+    if (num >= 1000) {
+      return `${(num / 1000).toFixed(1)}K`;
+    }
+    return String(num);
   }
 
   loadStatus() {
@@ -208,6 +222,7 @@ class Monitor {
     const pythonScript = String(response.python_script || "").trim();
     const summary = String(response.summary || "").trim();
     const output = live || lastCommands || "";
+    const tokenStats = status && status.token_stats ? status.token_stats : null;
 
     lines.push("【运行状态】");
     lines.push(`Cycle: ${status.cycle ?? "-"}`);
@@ -218,6 +233,17 @@ class Monitor {
     }
     if (summary) {
       lines.push(`Summary: ${summary}`);
+    }
+    if (tokenStats && tokenStats.requests > 0) {
+      lines.push("");
+      lines.push("【Token 统计】");
+      lines.push(`总请求数: ${tokenStats.requests}`);
+      lines.push(`总 Token: ${this.formatNumber(tokenStats.total_tokens)}`);
+      lines.push(`  - 输入: ${this.formatNumber(tokenStats.total_prompt_tokens)}`);
+      lines.push(`  - 输出: ${this.formatNumber(tokenStats.total_completion_tokens)}`);
+      if (tokenStats.last_updated) {
+        lines.push(`最后更新: ${tokenStats.last_updated}`);
+      }
     }
     lines.push("");
 

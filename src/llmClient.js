@@ -30,8 +30,12 @@ class LlmClient {
       });
     }
 
+    const openaiBaseUrl = isLocalVllm
+      ? `${baseUrl.replace(/\/$/, "")}/v1`
+      : baseUrl.replace(/\/$/, "");
+
     return new OpenAI({
-      baseURL: `${baseUrl.replace(/\/$/, "")}/v1`,
+      baseURL: openaiBaseUrl,
       apiKey,
       timeout: this.config.requestTimeoutSeconds * 1000,
       maxRetries: 0
@@ -78,7 +82,10 @@ class LlmClient {
         tokens: response.usage?.total_tokens || null
       });
 
-      return response.content;
+      return {
+        content: response.content,
+        usage: response.usage || null
+      };
     } catch (err) {
       this.logger?.error("llm.request.failed", {
         requestId,
@@ -109,7 +116,10 @@ class LlmClient {
           throw new Error("Unexpected LLM response format");
         }
 
-        return response.choices[0].message;
+        return {
+          ...response.choices[0].message,
+          usage: response.usage || null
+        };
       } catch (err) {
         attempt += 1;
         const isRetryable = this.isRetryableError(err);

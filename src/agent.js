@@ -34,9 +34,11 @@ class Agent {
     this.llmRawLogPath = path.join(config.logDir || "logs", "llm_raw.log");
     this.goalPath = path.join(config.stateDir, "current_goal.json");
     this.goalHistoryPath = path.join(config.stateDir, "goal_history.json");
+    this.tokenStatsPath = path.join(config.stateDir, "token_stats.json");
     ensureDir(path.dirname(this.llmRawLogPath));
     this.cycle = 0;
     this.allowlistPatterns = this.buildAllowlist(config.commandAllowlist || []);
+    this.tokenStats = this.loadTokenStats();
   }
 
   buildAllowlist(patterns) {
@@ -87,8 +89,11 @@ class Agent {
     let rawResponse = "";
     let llmError = "";
     let cleanedInfo = { cleaned: "", strippedThink: false };
+    let llmUsage = null;
     try {
-      rawResponse = await this.llm.chat(SYSTEM_PROMPT, userPrompt);
+      const llmResult = await this.llm.chat(SYSTEM_PROMPT, userPrompt);
+      rawResponse = llmResult.content;
+      llmUsage = llmResult.usage;
       cleanedInfo = this.cleanLlmOutput(rawResponse);
       this.appendLlmRaw(rawResponse, cleanedInfo);
     } catch (err) {
@@ -223,6 +228,10 @@ class Agent {
       this.appendCommandStream(`[goal.completed] ${currentGoal.title}\n`);
     } else if (currentGoal) {
       this.saveGoal(currentGoal);
+    }
+
+    if (llmUsage) {
+      this.updateTokenStats(llmUsage);
     }
 
     fs.writeFileSync(
@@ -530,7 +539,8 @@ class Agent {
       last_summary: summary,
       last_error: error || "",
       last_run_at: nowIso(),
-      sleep_seconds: sleepSeconds
+      sleep_seconds: sleepSeconds,
+      token_stats: this.tokenStats
     };
     fs.writeFileSync(this.statusPath, JSON.stringify(status, null, 2), "utf8");
   }
@@ -566,6 +576,44 @@ class Agent {
     history.push(goal);
     fs.writeFileSync(this.goalHistoryPath, JSON.stringify(history, null, 2), "utf8");
     fs.unlinkSync(this.goalPath);
+  }
+
+  loadTokenStats() {
+    const defaults = {
+      total_prompt_tokens: 0,
+      total_completion_tokens: 0,
+      total_tokens: 0,
+      requests: 0,
+      last_updated: null
+    };
+
+    if (!fs.existsSync(this.tokenStatsPath)) {
+      return defaults;
+    }
+
+    try {
+      const raw = fs.readFileSync(this.tokenStatsPath, "utf8");
+      const stats = JSON.parse(raw);
+      return { ...defaults, ...stats };
+    } catch (err) {
+      return defaults;
+    }
+  }
+
+  updateTokenStats(usage) {
+    if (!usage) return;
+
+    this.tokenStats.total_prompt_tokens += usage.prompt_tokens || 0;
+    this.tokenStats.total_completion_tokens += usage.completion_tokens || 0;
+    this.tokenStats.total_tokens += usage.total_tokens || 0;
+    this.tokenStats.requests += 1;
+    this.tokenStats.last_updated = nowIso();
+
+    try {
+      fs.writeFileSync(this.tokenStatsPath, JSON.stringify(this.tokenStats, null, 2), "utf8");
+    } catch (err) {
+      this.logger?.error("token.stats.save.failed", { error: err.message });
+    }
   }
 }
 

@@ -12,6 +12,7 @@
 - 永不停歇的主循环（崩溃自动恢复）
 - OpenAI 兼容接口（默认智谱 GLM-4.7-Flash，支持本地 vLLM）
 - 断线/不可用时自动等待重试（指数退避 + 抖动）
+- Token 使用实时统计与监控界面显示
 - Markdown 日志沉淀（`journal/`）
 - 执行由 AI 生成的 Python 脚本（脚本内运行 shell 命令并根据输出继续）
 - 实时美观的 CLI 监控界面（Claude 风格，Blessed TUI，显示实时命令输出）
@@ -112,6 +113,10 @@ npm run start:all
 ## 日志说明
 - 运行日志默认写入 `logs/wanderer.log`
 - 单文件达到 `LOG_MAX_BYTES` 后自动滚动，保留最近 `LOG_MAX_FILES` 份
+- Token 统计保存到 `state/token_stats.json`，包括：
+  - 总请求数
+  - 总 Token 数量（输入/输出/总计）
+  - 最后更新时间
 - 实时命令输出写入 `state/command_stream.log`，监控界面会实时读取
 - LLM 原始返回追加写入 `logs/llm_raw.log` 便于调试
 
