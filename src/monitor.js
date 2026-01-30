@@ -219,33 +219,13 @@ class Monitor {
     const journal = response.journal && typeof response.journal === "object" ? response.journal : {};
     const nowWork = String(journal.now_work || "").trim();
     const commands = this.normalizeList(response.commands);
-    const pythonScript = String(response.python_script || "").trim();
     const summary = String(response.summary || "").trim();
     const output = live || lastCommands || "";
-    const tokenStats = status && status.token_stats ? status.token_stats : null;
 
-    lines.push("【运行状态】");
-    lines.push(`Cycle: ${status.cycle ?? "-"}`);
-    lines.push(`Last run: ${status.last_run_at ?? "-"}`);
-    lines.push(`Sleep: ${status.sleep_seconds ?? "-"}s`);
-    if (status.last_error) {
-      lines.push(`Error: ${status.last_error}`);
-    }
     if (summary) {
       lines.push(`Summary: ${summary}`);
-    }
-    if (tokenStats && tokenStats.requests > 0) {
       lines.push("");
-      lines.push("【Token 统计】");
-      lines.push(`总请求数: ${tokenStats.requests}`);
-      lines.push(`总 Token: ${this.formatNumber(tokenStats.total_tokens)}`);
-      lines.push(`  - 输入: ${this.formatNumber(tokenStats.total_prompt_tokens)}`);
-      lines.push(`  - 输出: ${this.formatNumber(tokenStats.total_completion_tokens)}`);
-      if (tokenStats.last_updated) {
-        lines.push(`最后更新: ${tokenStats.last_updated}`);
-      }
     }
-    lines.push("");
 
     if (nowWork) {
       lines.push("【正在进行的工作】", nowWork, "");
@@ -259,18 +239,12 @@ class Monitor {
     }
     lines.push("");
 
-    if (pythonScript) {
-      lines.push("【python_script】");
-      lines.push(truncate(pythonScript, 2000));
-      lines.push("");
-    }
-
     lines.push("【命令输出】");
     if (output) {
       lines.push(output);
     } else {
       lines.push("(暂无实时输出)");
-      const hints = this.commandOutputHints(commands, pythonScript);
+      const hints = this.commandOutputHints(commands);
       if (hints.length) {
         hints.forEach((hint) => lines.push(`- ${hint}`));
       }
@@ -279,16 +253,13 @@ class Monitor {
     return lines.join("\n");
   }
 
-  commandOutputHints(commands, pythonScript) {
+  commandOutputHints(commands) {
     const hints = [];
     if (!this.config.allowCommandExecution) {
       hints.push("ALLOW_COMMAND_EXECUTION=false，命令执行被禁用");
     }
     if (!commands.length) {
       hints.push("本轮未生成 commands 列表");
-    }
-    if (!pythonScript) {
-      hints.push("本轮未生成 python_script");
     }
     if (!this.config.allowUnsafeCommands && !commands.length) {
       hints.push("ALLOW_UNSAFE_COMMANDS=false 时必须提供 commands 列表");
