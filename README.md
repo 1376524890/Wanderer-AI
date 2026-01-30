@@ -61,6 +61,17 @@ npm run monitor
 npm run start:all
 ```
 
+### 终端乱码怎么办？
+如果监控界面出现中文乱码，请先确保终端使用 UTF-8：
+```bash
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+```
+也可以强制使用英文 ASCII 界面（避免乱码）：
+```bash
+UI_ASCII=true npm run monitor
+```
+
 ## 运行逻辑概览
 每个循环会执行：
 1. 读取 `journal/` 最近日志作为上下文
