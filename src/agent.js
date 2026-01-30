@@ -32,6 +32,8 @@ class Agent {
     this.commandStreamPath = path.join(config.stateDir, "command_stream.log");
     this.lastScriptPath = path.join(config.stateDir, "last_script.py");
     this.llmRawLogPath = path.join(config.logDir || "logs", "llm_raw.log");
+    this.goalPath = path.join(config.stateDir, "current_goal.json");
+    this.goalHistoryPath = path.join(config.stateDir, "goal_history.json");
     ensureDir(path.dirname(this.llmRawLogPath));
     this.cycle = 0;
     this.allowlistPatterns = this.buildAllowlist(config.commandAllowlist || []);
@@ -73,11 +75,14 @@ class Agent {
 
   async runCycle() {
     this.resetCommandStream();
+    const loadedGoal = this.loadGoal();
     const journalContext = this.journal.readRecentContext(this.config.contextMaxChars);
     const commandContext = readTail(this.lastCommandsPath, this.config.contextMaxChars);
+    const goalContext = loadedGoal ? `\n\n当前目标：\n${JSON.stringify(loadedGoal, null, 2)}` : "";
     const userPrompt = USER_PROMPT_TEMPLATE
       .replace("{journal_context}", journalContext)
-      .replace("{command_context}", commandContext || "(暂无命令输出)");
+      .replace("{command_context}", commandContext || "(暂无命令输出)")
+      .replace("{goal_context}", goalContext);
 
     let rawResponse = "";
     let llmError = "";
@@ -98,6 +103,8 @@ class Agent {
 
     const summary = String(parsedSafe.summary || "");
     const thinking = String(parsedSafe.thinking || parsedSafe.thoughts || "");
+    const currentGoal = parsedSafe.current_goal || null;
+    const thisAction = parsedSafe.this_action || null;
     const plan = parsedSafe.plan || [];
     const commands = parsedSafe.commands || [];
     let pythonScript = this.normalizeScript(parsedSafe.python_script || parsedSafe.pythonScript || "");
@@ -113,6 +120,33 @@ class Agent {
     let commandList = this.normalizeList(commands);
     if (this.config.maxCommandsPerCycle > 0) {
       commandList = commandList.slice(0, this.config.maxCommandsPerCycle);
+    }
+
+    const planFirstStep = planLines[0] || "";
+    const diagnosticKeywords = ["检查", "查看", "确认", "验证", "排查", "状态", "日志", "env", "ps", "df", "ls", "cat", "tail"];
+    const isDiagnosticFirst = diagnosticKeywords.some((kw) => {
+      if (kw === "env") return /^\s*(ls|print)?\s*env\b/.test(planFirstStep);
+      if (kw === "ps") return /^\s*ps\b/.test(planFirstStep);
+      if (kw === "df") return /^\s*df\b/.test(planFirstStep);
+      if (kw === "ls") return /^\s*ls\b/.test(planFirstStep);
+      if (kw === "cat") return /^\s*cat\b/.test(planFirstStep);
+      if (kw === "tail") return /^\s*tail\b/.test(planFirstStep);
+      return planFirstStep.includes(kw);
+    });
+
+    if (isDiagnosticFirst && !llmError && parsedInfo.data) {
+      this.logger?.warn("plan.diagnostic.blocked", { firstStep: planFirstStep });
+      this.appendCommandStream("[blocked] 禁止以诊断/检查类操作作为第一步\n");
+      this.appendCommandStream(`first_step: ${planFirstStep}\n`);
+      parsedInfo.data = null;
+    }
+
+    if (!currentGoal) {
+      if (!llmError && parsedInfo.data) {
+        this.logger?.warn("plan.no_current_goal", {});
+        this.appendCommandStream("[blocked] 必须明确 current_goal\n");
+        parsedInfo.data = null;
+      }
     }
 
     const rawText = String(rawResponse || "").trim();
@@ -184,12 +218,21 @@ class Agent {
     const { filePath, entry } = this.journal.appendEntry(nowWork, outcomes, nextPlan);
     fs.writeFileSync(this.lastJournalPath, entry, "utf8");
 
+    if (currentGoal && currentGoal.phase === "completed") {
+      this.archiveGoal(currentGoal);
+      this.appendCommandStream(`[goal.completed] ${currentGoal.title}\n`);
+    } else if (currentGoal) {
+      this.saveGoal(currentGoal);
+    }
+
     fs.writeFileSync(
       this.lastResponsePath,
       JSON.stringify(
         {
           summary,
           thinking,
+          current_goal: currentGoal,
+          this_action: thisAction,
           plan: planLines,
           commands: commandList,
           python_script: pythonScript,
@@ -490,6 +533,39 @@ class Agent {
       sleep_seconds: sleepSeconds
     };
     fs.writeFileSync(this.statusPath, JSON.stringify(status, null, 2), "utf8");
+  }
+
+  loadGoal() {
+    if (!fs.existsSync(this.goalPath)) {
+      return null;
+    }
+    try {
+      const raw = fs.readFileSync(this.goalPath, "utf8");
+      return JSON.parse(raw);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  saveGoal(goal) {
+    if (!goal) return;
+    fs.writeFileSync(this.goalPath, JSON.stringify(goal, null, 2), "utf8");
+  }
+
+  archiveGoal(goal) {
+    if (!goal) return;
+    let history = [];
+    try {
+      if (fs.existsSync(this.goalHistoryPath)) {
+        history = JSON.parse(fs.readFileSync(this.goalHistoryPath, "utf8"));
+      }
+    } catch (err) {}
+
+    goal.completed_at = nowIso();
+    goal.cycles = this.cycle;
+    history.push(goal);
+    fs.writeFileSync(this.goalHistoryPath, JSON.stringify(history, null, 2), "utf8");
+    fs.unlinkSync(this.goalPath);
   }
 }
 

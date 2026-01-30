@@ -139,19 +139,51 @@ class Monitor {
     const lines = [];
     const summary = String(response.summary || "").trim();
     const thinking = String(response.thinking || response.thoughts || "").trim();
+    const currentGoal = response.current_goal && typeof response.current_goal === "object" ? response.current_goal : null;
+    const thisAction = response.this_action && typeof response.this_action === "object" ? response.this_action : null;
     const journal = response.journal && typeof response.journal === "object" ? response.journal : {};
     const outcomes = String(journal.outcomes || "").trim();
     const nextPlan = String(journal.next_plan || "").trim();
     const plan = this.normalizeList(response.plan);
 
+    if (currentGoal) {
+      lines.push("【当前目标】");
+      const title = String(currentGoal.title || "").trim();
+      const phase = String(currentGoal.phase || "").trim();
+      const description = String(currentGoal.description || "").trim();
+      if (title) {
+        lines.push(`标题: ${title}`);
+      }
+      if (phase) {
+        lines.push(`阶段: ${phase}`);
+      }
+      if (description) {
+        lines.push(`描述: ${description}`);
+      }
+      lines.push("");
+    }
+
+    if (thisAction) {
+      lines.push("【本轮动作】");
+      const actionSummary = String(thisAction.summary || "").trim();
+      const expectedOutcome = String(thisAction.expected_outcome || "").trim();
+      if (actionSummary) {
+        lines.push(`总结: ${actionSummary}`);
+      }
+      if (expectedOutcome) {
+        lines.push(`预期: ${expectedOutcome}`);
+      }
+      lines.push("");
+    }
+
     if (summary) {
-      lines.push("【当前总结】", summary, "");
+      lines.push("【总结】", summary, "");
     }
     if (thinking) {
       lines.push("【思考摘要】", thinking, "");
     }
     if (outcomes) {
-      lines.push("【达成的成果】", outcomes, "");
+      lines.push("【本轮成果】", outcomes, "");
     }
     if (plan.length) {
       lines.push("【计划】");
