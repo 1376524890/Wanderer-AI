@@ -17,12 +17,12 @@ function loadConfig() {
     : [];
 
   return {
-    vllmBaseUrl: process.env.VLLM_BASE_URL || "http://vllm.plk161211.top",
-    vllmModel: process.env.VLLM_MODEL || "qwen3-8b",
+    vllmBaseUrl: process.env.VLLM_BASE_URL || "https://open.bigmodel.cn/api/paas/v4",
+    vllmModel: process.env.VLLM_MODEL || "glm-4.7-flash",
     vllmApiKey: process.env.VLLM_API_KEY || "",
-    temperature: parseFloatValue(process.env.TEMPERATURE, 0.4),
+    temperature: parseFloatValue(process.env.TEMPERATURE, 0.7),
     topP: parseFloatValue(process.env.TOP_P, 0.9),
-    maxTokens: parseIntValue(process.env.MAX_TOKENS, 512),
+    maxTokens: parseIntValue(process.env.MAX_TOKENS, 4096),
     requestTimeoutSeconds: parseIntValue(process.env.REQUEST_TIMEOUT_SECONDS, 60),
     maxRetries: parseIntValue(process.env.MAX_RETRIES, 12),
     retryBaseSeconds: parseFloatValue(process.env.RETRY_BASE_SECONDS, 2),

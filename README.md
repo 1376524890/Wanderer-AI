@@ -10,12 +10,13 @@
 
 ## 功能特性
 - 永不停歇的主循环（崩溃自动恢复）
-- vLLM OpenAI 兼容接口（默认 `http://vllm.plk161211.top` + `qwen3-8b`）
+- OpenAI 兼容接口（默认智谱 GLM-4.7-Flash，支持本地 vLLM）
 - 断线/不可用时自动等待重试（指数退避 + 抖动）
 - Markdown 日志沉淀（`journal/`）
 - 执行由 AI 生成的 Python 脚本（脚本内运行 shell 命令并根据输出继续）
 - 实时美观的 CLI 监控界面（Claude 风格，Blessed TUI，显示实时命令输出）
 - 每个代码文件自带职责声明，变更时要求同步更新文档
+- 启动时交互式 API Key 配置
 
 ## 核心设计理念
 本代理采用**探索优先、主动创造**的设计，采用"动作原子性 + 多轮目标管理"的模式：
@@ -70,6 +71,10 @@ npm install
 ```bash
 npm run start
 ```
+首次运行时，系统会检测 API Key：
+- 如果 `.env` 中未配置 `VLLM_API_KEY`，会提示输入智谱 API Key
+- 可选择将 API Key 保存到 `.env` 文件
+- 获取 API Key：https://open.bigmodel.cn/
 
 4) 启动监控面板
 ```bash
@@ -91,8 +96,11 @@ npm run start:all
 
 ## 配置说明（.env）
 常用项：
-- `VLLM_BASE_URL` / `VLLM_MODEL`：模型地址与名称
+- `VLLM_BASE_URL` / `VLLM_MODEL`：模型地址与名称（默认智谱 GLM-4.7-Flash）
+- `VLLM_API_KEY`：智谱 AI API Key（首次启动时会交互式配置）
+  - 获取地址：https://open.bigmodel.cn/
 - `VLLM_BASE_URL` 建议包含 `http://` 或 `https://`（未写会自动补全）
+- 如需使用本地 vLLM，设置为本地地址（如 `http://localhost:8000`）
 - `ALLOW_COMMAND_EXECUTION`：是否允许命令执行
 - `ALLOW_UNSAFE_COMMANDS`：是否允许不受限制的命令
 - `MAX_COMMANDS_PER_CYCLE`：每轮最大命令数，`0` 表示无限制
