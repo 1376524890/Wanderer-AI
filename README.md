@@ -87,6 +87,7 @@ npm run start:all
 - 运行日志默认写入 `logs/wanderer.log`
 - 单文件达到 `LOG_MAX_BYTES` 后自动滚动，保留最近 `LOG_MAX_FILES` 份
 - 实时命令输出写入 `state/command_stream.log`，监控界面会实时读取
+- LLM 原始返回追加写入 `logs/llm_raw.log` 便于调试
 
 ## 文档与维护约定
 - 所有代码文件头部必须有 5 行左右职责声明

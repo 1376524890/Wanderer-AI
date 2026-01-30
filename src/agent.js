@@ -31,6 +31,8 @@ class Agent {
     this.lastResponsePath = path.join(config.stateDir, "last_response.json");
     this.commandStreamPath = path.join(config.stateDir, "command_stream.log");
     this.lastScriptPath = path.join(config.stateDir, "last_script.py");
+    this.llmRawLogPath = path.join(config.logDir || "logs", "llm_raw.log");
+    ensureDir(path.dirname(this.llmRawLogPath));
     this.cycle = 0;
     this.allowlistPatterns = this.buildAllowlist(config.commandAllowlist || []);
   }
@@ -70,20 +72,34 @@ class Agent {
   }
 
   async runCycle() {
+    this.resetCommandStream();
     const journalContext = this.journal.readRecentContext(this.config.contextMaxChars);
     const commandContext = readTail(this.lastCommandsPath, this.config.contextMaxChars);
     const userPrompt = USER_PROMPT_TEMPLATE
       .replace("{journal_context}", journalContext)
       .replace("{command_context}", commandContext || "(暂无命令输出)");
 
-    const rawResponse = await this.llm.chat(SYSTEM_PROMPT, userPrompt);
-    const parsedInfo = this.parseWithDiagnostics(rawResponse);
+    let rawResponse = "";
+    let llmError = "";
+    let cleanedInfo = { cleaned: "", strippedThink: false };
+    try {
+      rawResponse = await this.llm.chat(SYSTEM_PROMPT, userPrompt);
+      cleanedInfo = this.cleanLlmOutput(rawResponse);
+      this.appendLlmRaw(rawResponse, cleanedInfo);
+    } catch (err) {
+      llmError = err && err.message ? err.message : String(err);
+      this.logger?.error("llm.request.failed", { error: llmError });
+      this.appendCommandStream("[llm.error]\n");
+      this.appendCommandStream(`base_url: ${this.config.vllmBaseUrl}\n`);
+      this.appendCommandStream(`error: ${llmError}\n\n`);
+    }
+    const parsedInfo = this.parseWithDiagnostics(cleanedInfo.cleaned || rawResponse);
     const parsedSafe = parsedInfo.data || {};
 
     const summary = String(parsedSafe.summary || "");
     const plan = parsedSafe.plan || [];
     const commands = parsedSafe.commands || [];
-    const pythonScript = this.normalizeScript(parsedSafe.python_script || parsedSafe.pythonScript || "");
+    let pythonScript = this.normalizeScript(parsedSafe.python_script || parsedSafe.pythonScript || "");
     const journal = typeof parsedSafe.journal === "object" && parsedSafe.journal ? parsedSafe.journal : {};
     let what = String(journal.what || "");
     let why = String(journal.why || "");
@@ -99,19 +115,28 @@ class Agent {
     }
 
     const rawText = String(rawResponse || "").trim();
+    const cleanedText = String(cleanedInfo.cleaned || "").trim();
     const missingJournal = !String(what).trim() || !String(why).trim() || !String(learnings).trim();
-    if (!parsedInfo.data || missingJournal) {
+    if (!parsedInfo.data || missingJournal || llmError) {
       this.logger?.warn("llm.output.invalid", {
         parsed: Boolean(parsedInfo.data),
         extracted: parsedInfo.extracted,
+        repaired: parsedInfo.repaired,
+        strippedThink: cleanedInfo.strippedThink,
         missingJournal,
-        error: parsedInfo.error || ""
+        error: parsedInfo.error || "",
+        llmError
       });
       if (rawText) {
         this.appendCommandStream("=== LLM DEBUG ===\n");
         this.appendCommandStream(`parsed: ${Boolean(parsedInfo.data)} | extracted: ${parsedInfo.extracted}\n`);
+        this.appendCommandStream(`repaired: ${parsedInfo.repaired}\n`);
+        this.appendCommandStream(`stripped_think: ${cleanedInfo.strippedThink}\n`);
         if (parsedInfo.error) {
           this.appendCommandStream(`parse_error: ${parsedInfo.error}\n`);
+        }
+        if (llmError) {
+          this.appendCommandStream(`request_error: ${llmError}\n`);
         }
         this.appendCommandStream(`raw_chars: ${rawText.length}\n`);
         if (parsedInfo.data) {
@@ -121,11 +146,28 @@ class Agent {
         }
         this.appendCommandStream("[llm.raw]\n");
         this.appendCommandStream(`${truncate(rawText, 12000)}\n\n`);
+        if (cleanedText && cleanedText !== rawText) {
+          this.appendCommandStream("[llm.cleaned]\n");
+          this.appendCommandStream(`${truncate(cleanedText, 12000)}\n\n`);
+        }
+      } else if (llmError) {
+        this.appendCommandStream("=== LLM DEBUG ===\n");
+        this.appendCommandStream(`parsed: false | extracted: ${parsedInfo.extracted}\n`);
+        this.appendCommandStream(`repaired: ${parsedInfo.repaired}\n`);
+        this.appendCommandStream(`stripped_think: ${cleanedInfo.strippedThink}\n`);
+        if (parsedInfo.error) {
+          this.appendCommandStream(`parse_error: ${parsedInfo.error}\n`);
+        }
+        this.appendCommandStream(`request_error: ${llmError}\n\n`);
       }
     }
 
+    if (!pythonScript && commandList.length) {
+      pythonScript = this.buildScriptFromCommands(commandList);
+      this.appendCommandStream("[llm.repair] generated python_script from commands\n");
+    }
 
-    this.resetCommandStream();
+
     let commandResults = [];
     if (pythonScript) {
       commandResults = await this.executePythonScript(pythonScript, commandList);
@@ -150,7 +192,9 @@ class Agent {
           commands: commandList,
           python_script: pythonScript,
           journal: { what, why, learnings },
-          raw: rawResponse
+          raw: rawResponse,
+          raw_cleaned: cleanedText,
+          error: llmError
         },
         null,
         2
@@ -186,10 +230,10 @@ class Agent {
     const text = String(raw || "");
     const trimmed = text.trim();
     if (!trimmed) {
-      return { data: null, error: "empty response", extracted: false };
+      return { data: null, error: "empty response", extracted: false, repaired: false };
     }
     try {
-      return { data: JSON.parse(trimmed), error: "", extracted: false };
+      return { data: JSON.parse(trimmed), error: "", extracted: false, repaired: false };
     } catch (err) {
       const primaryError = err && err.message ? err.message : String(err);
       const start = trimmed.indexOf("{");
@@ -197,20 +241,67 @@ class Agent {
       if (start !== -1 && end !== -1 && end > start) {
         const slice = trimmed.slice(start, end + 1);
         try {
-          return { data: JSON.parse(slice), error: primaryError, extracted: true };
+          return { data: JSON.parse(slice), error: primaryError, extracted: true, repaired: false };
         } catch (inner) {
           const innerError = inner && inner.message ? inner.message : String(inner);
+          const repaired = this.tryRepairJson(slice);
+          if (repaired) {
+            return { data: repaired, error: `${primaryError}; repaired`, extracted: true, repaired: true };
+          }
           return {
             data: null,
             error: `${primaryError}; extract failed: ${innerError}`,
-            extracted: true
+            extracted: true,
+            repaired: false
           };
         }
       }
-      return { data: null, error: `${primaryError}; no json object found`, extracted: false };
+      const repaired = this.tryRepairJson(trimmed);
+      if (repaired) {
+        return { data: repaired, error: `${primaryError}; repaired`, extracted: false, repaired: true };
+      }
+      return { data: null, error: `${primaryError}; no json object found`, extracted: false, repaired: false };
     }
   }
 
+  tryRepairJson(text) {
+    if (!text) return null;
+    const braceStart = text.indexOf("{");
+    if (braceStart === -1) return null;
+    const candidate = text.slice(braceStart);
+    const scriptIndex = candidate.indexOf("\"python_script\"");
+    if (scriptIndex === -1) return null;
+    const before = candidate.slice(0, scriptIndex).replace(/,\s*$/, "");
+    const repaired = `${before}\n}`;
+    try {
+      return JSON.parse(repaired);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  buildScriptFromCommands(commands) {
+    const safe = commands.map((item) => String(item));
+    const lines = [
+      "import subprocess",
+      "commands = ["
+    ];
+    for (const cmd of safe) {
+      lines.push(`    ${JSON.stringify(cmd)},`);
+    }
+    lines.push("]");
+    lines.push("for cmd in commands:");
+    lines.push("    print(f'>>> $ {cmd}', flush=True)");
+    lines.push("    result = subprocess.run(cmd, shell=True, text=True, capture_output=True)");
+    lines.push("    if result.stdout:");
+    lines.push("        print(result.stdout, end='', flush=True)");
+    lines.push("    if result.stderr:");
+    lines.push("        print(result.stderr, end='', flush=True)");
+    lines.push("    if result.returncode != 0:");
+    lines.push("        print(f'[exit {result.returncode}]', flush=True)");
+    lines.push("        break");
+    return lines.join("\n");
+  }
   async executeCommands(commands) {
     const results = [];
     if (!this.config.allowCommandExecution) return results;
@@ -359,6 +450,33 @@ class Agent {
   appendCommandStream(text) {
     if (!text) return;
     fs.appendFileSync(this.commandStreamPath, text, "utf8");
+  }
+
+  cleanLlmOutput(raw) {
+    const text = String(raw || "");
+    const trimmed = text.trim();
+    if (!trimmed) return { cleaned: "", strippedThink: false };
+    let cleaned = trimmed.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+    let strippedThink = cleaned !== trimmed;
+    if (!cleaned && trimmed) {
+      cleaned = trimmed;
+    }
+    if (cleaned.includes("<think>")) {
+      strippedThink = true;
+      const firstBrace = cleaned.indexOf("{");
+      cleaned = (firstBrace !== -1 ? cleaned.slice(firstBrace) : cleaned).replace(/<think>/gi, "").trim();
+    }
+    return { cleaned, strippedThink };
+  }
+
+  appendLlmRaw(raw, cleanedInfo) {
+    if (!raw) return;
+    const header = `--- ${nowIso()} cycle:${this.cycle} ---\n`;
+    let payload = header + String(raw).trim() + "\n\n";
+    if (cleanedInfo && cleanedInfo.strippedThink && cleanedInfo.cleaned) {
+      payload += `[cleaned]\n${String(cleanedInfo.cleaned).trim()}\n\n`;
+    }
+    fs.appendFileSync(this.llmRawLogPath, payload, "utf8");
   }
 
   writeStatus(summary, error, sleepSeconds) {
