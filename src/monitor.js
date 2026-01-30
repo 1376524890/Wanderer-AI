@@ -17,28 +17,20 @@ class Monitor {
     this.lastJournalPath = path.join(config.stateDir, "last_journal_entry.md");
     this.lastCommandsPath = path.join(config.stateDir, "last_commands.md");
     this.startTime = Date.now();
-    this.useAscii = this.detectAsciiMode();
   }
 
   run() {
     const screen = blessed.screen({
       smartCSR: true,
-      title: this.useAscii ? "Wanderer AI Console" : "Wanderer AI 控制台"
+      title: "Wanderer AI Console"
     });
 
-    const labels = this.useAscii
-      ? {
-          journal: "Journal",
-          status: "Status",
-          commands: "Commands",
-          footer: "Keys: q to quit | Ctrl+C to quit"
-        }
-      : {
-          journal: "探索日志",
-          status: "状态",
-          commands: "命令输出",
-          footer: "快捷键：q 退出 | Ctrl+C 退出"
-        };
+    const labels = {
+      journal: "Journal",
+      status: "Status",
+      commands: "Commands",
+      footer: "Keys: q to quit | Ctrl+C to quit"
+    };
 
     const header = blessed.box({
       parent: screen,
@@ -103,8 +95,8 @@ class Monitor {
     const render = () => {
       header.setContent(this.renderHeader());
       statusBox.setContent(this.renderStatus());
-      journalBox.setContent(readTail(this.lastJournalPath, 5000) || (this.useAscii ? "(no journal)" : "(暂无日志)"));
-      commandBox.setContent(readTail(this.lastCommandsPath, 2000) || (this.useAscii ? "(no commands)" : "(暂无命令执行)"));
+      journalBox.setContent(readTail(this.lastJournalPath, 5000) || "(no journal)");
+      commandBox.setContent(readTail(this.lastCommandsPath, 2000) || "(no commands)");
       footer.setContent(labels.footer);
       screen.render();
     };
@@ -124,37 +116,21 @@ class Monitor {
     const minutes = Math.floor((uptime % 3600) / 60);
     const seconds = uptime % 60;
     const uptimeText = `${hours}h ${minutes}m ${seconds}s`;
-    return this.useAscii
-      ? ` Wanderer AI | Claude-style Monitor | Uptime: ${uptimeText}`
-      : ` Wanderer AI · Claude 风格监控  |  Uptime: ${uptimeText}`;
+    return ` Wanderer AI | Claude-style Monitor | Uptime: ${uptimeText}`;
   }
 
   renderStatus() {
     const data = this.loadStatus();
-    const lines = this.useAscii
-      ? [
-          `Cycle: ${data.cycle ?? "-"}`,
-          `Last run: ${data.last_run_at ?? "-"}`,
-          `Sleep: ${data.sleep_seconds ?? "-"}s`,
-          `Summary: ${data.last_summary ?? ""}`
-        ]
-      : [
-          `轮次: ${data.cycle ?? "-"}`,
-          `上次运行: ${data.last_run_at ?? "-"}`,
-          `休眠: ${data.sleep_seconds ?? "-"}s`,
-          `总结: ${data.last_summary ?? ""}`
-        ];
+    const lines = [
+      `Cycle: ${data.cycle ?? "-"}`,
+      `Last run: ${data.last_run_at ?? "-"}`,
+      `Sleep: ${data.sleep_seconds ?? "-"}s`,
+      `Summary: ${data.last_summary ?? ""}`
+    ];
     if (data.last_error) {
-      lines.push(this.useAscii ? `Error: ${data.last_error}` : `错误: ${data.last_error}`);
+      lines.push(`Error: ${data.last_error}`);
     }
     return lines.join("\n");
-  }
-
-  detectAsciiMode() {
-    if (process.env.UI_ASCII === "1" || process.env.UI_ASCII === "true") return true;
-    const locale = [process.env.LC_ALL, process.env.LC_CTYPE, process.env.LANG].filter(Boolean).join(" ");
-    if (!locale) return false;
-    return !/utf-?8/i.test(locale);
   }
 
   loadStatus() {
