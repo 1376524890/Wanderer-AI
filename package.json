@@ -1,0 +1,19 @@
+{
+  "name": "wanderer-ai",
+  "version": "0.1.0",
+  "description": "自主探索 AI 代理（Node.js 版）",
+  "private": true,
+  "main": "run-agent.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node run-agent.js",
+    "monitor": "node run-monitor.js",
+    "start:all": "node run-monitor.js & node run-agent.js"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "dotenv": "^16.4.5"
+  }
+}
