@@ -1,13 +1,13 @@
-/* 用途：运行自主探索主循环并管理状态输出。
+/* 用途：运行自主探索主循环、执行脚本/命令并管理状态输出。
 不负责：渲染监控界面。
 输入：配置、日志历史与模型响应。
-输出：更新日志条目、状态文件与可选命令结果。
+输出：更新日志条目、状态文件、脚本与命令执行结果。
 关联：src/llmClient.js, src/journal.js, src/logger.js。
 */
 
 const fs = require("fs");
 const path = require("path");
-const { exec } = require("child_process");
+const { spawn } = require("child_process");
 
 const { Journal } = require("./journal");
 const { LlmClient } = require("./llmClient");
@@ -29,6 +29,8 @@ class Agent {
     this.lastCommandsPath = path.join(config.stateDir, "last_commands.md");
     this.lastJournalPath = path.join(config.stateDir, "last_journal_entry.md");
     this.lastResponsePath = path.join(config.stateDir, "last_response.json");
+    this.commandStreamPath = path.join(config.stateDir, "command_stream.log");
+    this.lastScriptPath = path.join(config.stateDir, "last_script.py");
     this.cycle = 0;
     this.allowlistPatterns = this.buildAllowlist(config.commandAllowlist || []);
   }
@@ -80,6 +82,7 @@ class Agent {
     const summary = String(parsed.summary || "");
     const plan = parsed.plan || [];
     const commands = parsed.commands || [];
+    const pythonScript = this.normalizeScript(parsed.python_script || parsed.pythonScript || "");
     const journal = typeof parsed.journal === "object" && parsed.journal ? parsed.journal : {};
     let what = String(journal.what || "");
     let why = String(journal.why || "");
@@ -94,11 +97,21 @@ class Agent {
       commandList = commandList.slice(0, this.config.maxCommandsPerCycle);
     }
 
-    if (!what) what = "本轮根据上下文生成了探索计划。";
-    if (!why) why = "确保探索过程持续进行并可追踪。";
-    if (!learnings) learnings = "需要进一步行动以产生新的发现。";
+    if (!what) what = "LLM连接失败，请检查服务状态。";
+    if (!why) why = "LLM连接失败，请检查服务状态。";
+    if (!learnings) learnings = "LLM连接失败，请检查服务状态。";
 
-    const commandResults = await this.executeCommands(commandList);
+    this.resetCommandStream();
+    let commandResults = [];
+    if (pythonScript) {
+      commandResults = await this.executePythonScript(pythonScript, commandList);
+    } else {
+      if (commandList.length) {
+        this.logger?.warn("script.missing", { cycle: this.cycle });
+        this.appendCommandStream("[warn] python_script missing; running commands directly.\n");
+      }
+      commandResults = await this.executeCommands(commandList);
+    }
     this.writeCommands(commandResults);
 
     const { filePath, entry } = this.journal.appendEntry(what, why, learnings);
@@ -111,6 +124,7 @@ class Agent {
           summary,
           plan: planLines,
           commands: commandList,
+          python_script: pythonScript,
           journal: { what, why, learnings },
           raw: rawResponse
         },
@@ -133,6 +147,17 @@ class Agent {
     return [];
   }
 
+  normalizeScript(value) {
+    if (Array.isArray(value)) {
+      const lines = value.map((line) => String(line));
+      const joined = lines.join("\n").trim();
+      return joined ? joined : "";
+    }
+    if (typeof value !== "string") return "";
+    const trimmed = value.trim();
+    return trimmed ? trimmed : "";
+  }
+
   async executeCommands(commands) {
     const results = [];
     if (!this.config.allowCommandExecution) return results;
@@ -141,16 +166,20 @@ class Agent {
       if (!command.trim()) continue;
       if (!this.isCommandAllowed(command)) {
         this.logger?.warn("command.blocked", { command });
+        this.appendCommandStream(`[blocked] ${command}\n`);
         results.push({ command, status: "blocked", output: "Command blocked" });
         continue;
       }
       try {
         this.logger?.info("command.start", { command });
-        const output = await this.execCommand(command);
+        this.appendCommandStream(`>>> $ ${command}\n`);
+        const output = await this.execProcess("bash", ["-lc", command]);
         this.logger?.info("command.end", { command, status: output.status });
+        this.appendCommandStream(`\n[status: ${output.status}]\n\n`);
         results.push({ command, status: output.status, output: output.output });
       } catch (err) {
         this.logger?.error("command.error", { command, error: err.message || String(err) });
+        this.appendCommandStream(`[error] ${err.message || String(err)}\n`);
         results.push({ command, status: "error", output: err.message || String(err) });
       }
     }
@@ -158,25 +187,95 @@ class Agent {
     return results;
   }
 
-  execCommand(command) {
-    return new Promise((resolve, reject) => {
-      exec(
-        command,
-        {
-          shell: "bash",
-          timeout: this.config.commandTimeoutSeconds * 1000,
-          maxBuffer: 1024 * 1024
-        },
-        (error, stdout, stderr) => {
-          const combined = (stdout + stderr).trim();
-          const output = combined ? truncate(combined, 2000) : "(no output)";
-          if (error) {
-            const status = typeof error.code === "number" ? `exit ${error.code}` : "error";
-            return resolve({ status, output });
+  async executePythonScript(script, commands) {
+    const results = [];
+    if (!this.config.allowCommandExecution) return results;
+    if (!script) return results;
+
+    const blockedReason = this.validateCommandsForScript(commands);
+    if (blockedReason) {
+      this.logger?.warn("script.blocked", { reason: blockedReason });
+      this.appendCommandStream(`[blocked] ${blockedReason}\n`);
+      results.push({ command: "python_script", status: "blocked", output: blockedReason });
+      return results;
+    }
+
+    fs.writeFileSync(this.lastScriptPath, script, "utf8");
+    const runner = `${this.config.pythonBin} -u ${this.lastScriptPath}`;
+    this.logger?.info("script.start", { runner });
+    this.appendCommandStream(`>>> $ ${runner}\n`);
+    const output = await this.execProcess(this.config.pythonBin, ["-u", this.lastScriptPath]);
+    this.logger?.info("script.end", { runner, status: output.status });
+    this.appendCommandStream(`\n[status: ${output.status}]\n\n`);
+    results.push({ command: "python_script", status: output.status, output: output.output });
+    return results;
+  }
+
+  validateCommandsForScript(commands) {
+    if (this.config.allowUnsafeCommands) return "";
+    if (!commands || !commands.length) {
+      return "Commands list is required when ALLOW_UNSAFE_COMMANDS=false";
+    }
+    for (const command of commands) {
+      if (!this.isCommandAllowed(command)) {
+        return `Command blocked: ${command}`;
+      }
+    }
+    return "";
+  }
+
+  execProcess(command, args) {
+    return new Promise((resolve) => {
+      const timeoutMs = Math.max(1, this.config.commandTimeoutSeconds) * 1000;
+      const child = spawn(command, args, {
+        shell: false,
+        env: process.env
+      });
+
+      let output = "";
+      let outputTruncated = false;
+      let timedOut = false;
+
+      const handleChunk = (chunk) => {
+        const text = chunk.toString();
+        if (text) this.appendCommandStream(text);
+        if (!outputTruncated) {
+          const remaining = 8000 - output.length;
+          if (remaining > 0) {
+            output += text.slice(0, remaining);
           }
-          resolve({ status: "exit 0", output });
+          if (output.length >= 8000) {
+            outputTruncated = true;
+          }
         }
-      );
+      };
+
+      const timer = setTimeout(() => {
+        timedOut = true;
+        this.appendCommandStream(`\n[timeout after ${this.config.commandTimeoutSeconds}s]\n`);
+        child.kill("SIGKILL");
+      }, timeoutMs);
+
+      child.stdout.on("data", handleChunk);
+      child.stderr.on("data", handleChunk);
+      child.on("error", (err) => {
+        clearTimeout(timer);
+        resolve({ status: "error", output: err.message || String(err) });
+      });
+      child.on("close", (code, signal) => {
+        clearTimeout(timer);
+        let status = "exit 0";
+        if (timedOut) {
+          status = "timeout";
+        } else if (signal) {
+          status = `signal ${signal}`;
+        } else if (typeof code === "number") {
+          status = `exit ${code}`;
+        }
+        const combined = outputTruncated ? `${output}...` : output;
+        const trimmed = combined.trim();
+        resolve({ status, output: trimmed ? truncate(trimmed, 2000) : "(no output)" });
+      });
     });
   }
 
@@ -198,6 +297,15 @@ class Agent {
       lines.push("");
     }
     fs.writeFileSync(this.lastCommandsPath, lines.join("\n"), "utf8");
+  }
+
+  resetCommandStream() {
+    fs.writeFileSync(this.commandStreamPath, "", "utf8");
+  }
+
+  appendCommandStream(text) {
+    if (!text) return;
+    fs.appendFileSync(this.commandStreamPath, text, "utf8");
   }
 
   writeStatus(summary, error, sleepSeconds) {

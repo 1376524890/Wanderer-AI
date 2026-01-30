@@ -13,7 +13,8 @@
 - vLLM OpenAI 兼容接口（默认 `http://vllm.plk161211.top` + `qwen3-8b`）
 - 断线/不可用时自动等待重试（指数退避 + 抖动）
 - Markdown 日志沉淀（`journal/`）
-- 实时美观的 CLI 监控界面（Claude 风格，Blessed TUI）
+- 执行由 AI 生成的 Python 脚本（脚本内运行 shell 命令并根据输出继续）
+- 实时美观的 CLI 监控界面（Claude 风格，Blessed TUI，显示实时命令输出）
 - 每个代码文件自带职责声明，变更时要求同步更新文档
 
 ## 目录结构
@@ -66,8 +67,8 @@ npm run start:all
 ## 运行逻辑概览
 每个循环会执行：
 1. 读取 `journal/` 最近日志作为上下文
-2. 调用 LLM 生成下一步计划、可选命令与日志内容
-3. 执行命令（由 `.env` 控制）
+2. 调用 LLM 生成下一步计划、命令清单与 Python 脚本内容
+3. 执行 Python 脚本（脚本内运行 shell 命令并输出结果）
 4. 写入 `journal/` 与 `state/` 状态文件
 
 ## 配置说明（.env）
@@ -77,12 +78,15 @@ npm run start:all
 - `ALLOW_COMMAND_EXECUTION`：是否允许命令执行
 - `ALLOW_UNSAFE_COMMANDS`：是否允许不受限制的命令
 - `MAX_COMMANDS_PER_CYCLE`：每轮最大命令数，`0` 表示无限制
+- `COMMAND_TIMEOUT_SECONDS`：单次脚本/命令最大运行时间（默认 300 秒）
+- `PYTHON_BIN`：Python 可执行文件（默认 `python3`）
 - `LOOP_SLEEP_SECONDS`：每轮循环间隔
 - `LOG_FILE` / `LOG_MAX_BYTES` / `LOG_MAX_FILES`：日志文件与滚动策略
 
 ## 日志说明
 - 运行日志默认写入 `logs/wanderer.log`
 - 单文件达到 `LOG_MAX_BYTES` 后自动滚动，保留最近 `LOG_MAX_FILES` 份
+- 实时命令输出写入 `state/command_stream.log`，监控界面会实时读取
 
 ## 文档与维护约定
 - 所有代码文件头部必须有 5 行左右职责声明

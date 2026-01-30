@@ -16,6 +16,7 @@ class Monitor {
     this.statusPath = path.join(config.stateDir, "status.json");
     this.lastJournalPath = path.join(config.stateDir, "last_journal_entry.md");
     this.lastCommandsPath = path.join(config.stateDir, "last_commands.md");
+    this.commandStreamPath = path.join(config.stateDir, "command_stream.log");
     this.startTime = Date.now();
   }
 
@@ -30,7 +31,7 @@ class Monitor {
     const labels = {
       journal: "Journal",
       status: "Status",
-      commands: "Commands",
+      commands: "Live Commands",
       footer: "Keys: q to quit | Ctrl+C to quit"
     };
 
@@ -98,7 +99,8 @@ class Monitor {
       header.setContent(this.renderHeader());
       statusBox.setContent(this.renderStatus());
       journalBox.setContent(readTail(this.lastJournalPath, 5000) || "(no journal)");
-      commandBox.setContent(readTail(this.lastCommandsPath, 2000) || "(no commands)");
+      const live = readTail(this.commandStreamPath, 5000);
+      commandBox.setContent(live || readTail(this.lastCommandsPath, 2000) || "(no commands)");
       footer.setContent(labels.footer);
       screen.render();
     };
