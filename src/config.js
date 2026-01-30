@@ -29,7 +29,7 @@ function loadConfig() {
     retryMaxSeconds: parseFloatValue(process.env.RETRY_MAX_SECONDS, 90),
     retryBackoffMultiplier: parseFloatValue(process.env.RETRY_BACKOFF_MULTIPLIER, 2),
     retryJitterSeconds: parseFloatValue(process.env.RETRY_JITTER_SECONDS, 1.5),
-    loopSleepSeconds: parseIntValue(process.env.LOOP_SLEEP_SECONDS, 20),
+    loopSleepSeconds: parseIntValue(process.env.LOOP_SLEEP_SECONDS, 10),
     contextMaxChars: parseIntValue(process.env.CONTEXT_MAX_CHARS, 6000),
     allowCommandExecution: parseBool(process.env.ALLOW_COMMAND_EXECUTION, true),
     allowUnsafeCommands: parseBool(process.env.ALLOW_UNSAFE_COMMANDS, true),

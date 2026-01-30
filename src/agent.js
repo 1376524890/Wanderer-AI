@@ -12,7 +12,7 @@ const { spawn } = require("child_process");
 const { Journal } = require("./journal");
 const { LlmClient } = require("./llmClient");
 const { SYSTEM_PROMPT, USER_PROMPT_TEMPLATE } = require("./prompts");
-const { ensureDir, nowIso, readTail, safeJsonExtract, truncate } = require("./utils");
+const { ensureDir, nowIso, readTail, truncate } = require("./utils");
 
 function sleep(seconds) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(1, seconds) * 1000));
@@ -77,8 +77,8 @@ class Agent {
       .replace("{command_context}", commandContext || "(暂无命令输出)");
 
     const rawResponse = await this.llm.chat(SYSTEM_PROMPT, userPrompt);
-    const parsed = safeJsonExtract(rawResponse);
-    const parsedSafe = parsed || {};
+    const parsedInfo = this.parseWithDiagnostics(rawResponse);
+    const parsedSafe = parsedInfo.data || {};
 
     const summary = String(parsedSafe.summary || "");
     const plan = parsedSafe.plan || [];
@@ -100,11 +100,27 @@ class Agent {
 
     const rawText = String(rawResponse || "").trim();
     const missingJournal = !String(what).trim() || !String(why).trim() || !String(learnings).trim();
-    if (!parsed || missingJournal) {
-      this.logger?.warn("llm.output.invalid", { parsed: Boolean(parsed), missingJournal });
+    if (!parsedInfo.data || missingJournal) {
+      this.logger?.warn("llm.output.invalid", {
+        parsed: Boolean(parsedInfo.data),
+        extracted: parsedInfo.extracted,
+        missingJournal,
+        error: parsedInfo.error || ""
+      });
       if (rawText) {
+        this.appendCommandStream("=== LLM DEBUG ===\n");
+        this.appendCommandStream(`parsed: ${Boolean(parsedInfo.data)} | extracted: ${parsedInfo.extracted}\n`);
+        if (parsedInfo.error) {
+          this.appendCommandStream(`parse_error: ${parsedInfo.error}\n`);
+        }
+        this.appendCommandStream(`raw_chars: ${rawText.length}\n`);
+        if (parsedInfo.data) {
+          const jsonText = truncate(JSON.stringify(parsedInfo.data, null, 2), 4000);
+          this.appendCommandStream("[llm.json]\n");
+          this.appendCommandStream(`${jsonText}\n`);
+        }
         this.appendCommandStream("[llm.raw]\n");
-        this.appendCommandStream(`${truncate(rawText, 4000)}\n\n`);
+        this.appendCommandStream(`${truncate(rawText, 12000)}\n\n`);
       }
     }
 
@@ -164,6 +180,35 @@ class Agent {
     if (typeof value !== "string") return "";
     const trimmed = value.trim();
     return trimmed ? trimmed : "";
+  }
+
+  parseWithDiagnostics(raw) {
+    const text = String(raw || "");
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return { data: null, error: "empty response", extracted: false };
+    }
+    try {
+      return { data: JSON.parse(trimmed), error: "", extracted: false };
+    } catch (err) {
+      const primaryError = err && err.message ? err.message : String(err);
+      const start = trimmed.indexOf("{");
+      const end = trimmed.lastIndexOf("}");
+      if (start !== -1 && end !== -1 && end > start) {
+        const slice = trimmed.slice(start, end + 1);
+        try {
+          return { data: JSON.parse(slice), error: primaryError, extracted: true };
+        } catch (inner) {
+          const innerError = inner && inner.message ? inner.message : String(inner);
+          return {
+            data: null,
+            error: `${primaryError}; extract failed: ${innerError}`,
+            extracted: true
+          };
+        }
+      }
+      return { data: null, error: `${primaryError}; no json object found`, extracted: false };
+    }
   }
 
   async executeCommands(commands) {

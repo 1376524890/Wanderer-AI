@@ -99,8 +99,8 @@ class Monitor {
       header.setContent(this.renderHeader());
       statusBox.setContent(this.renderStatus());
       journalBox.setContent(readTail(this.lastJournalPath, 5000) || "(no journal)");
-      const live = readTail(this.commandStreamPath, 5000);
-      commandBox.setContent(live || readTail(this.lastCommandsPath, 2000) || "(no commands)");
+      const live = readTail(this.commandStreamPath, 12000);
+      commandBox.setContent(live || readTail(this.lastCommandsPath, 4000) || "(no commands)");
       footer.setContent(labels.footer);
       screen.render();
     };
