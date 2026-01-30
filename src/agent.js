@@ -77,18 +77,19 @@ class Agent {
       .replace("{command_context}", commandContext || "(暂无命令输出)");
 
     const rawResponse = await this.llm.chat(SYSTEM_PROMPT, userPrompt);
-    const parsed = safeJsonExtract(rawResponse) || {};
+    const parsed = safeJsonExtract(rawResponse);
+    const parsedSafe = parsed || {};
 
-    const summary = String(parsed.summary || "");
-    const plan = parsed.plan || [];
-    const commands = parsed.commands || [];
-    const pythonScript = this.normalizeScript(parsed.python_script || parsed.pythonScript || "");
-    const journal = typeof parsed.journal === "object" && parsed.journal ? parsed.journal : {};
+    const summary = String(parsedSafe.summary || "");
+    const plan = parsedSafe.plan || [];
+    const commands = parsedSafe.commands || [];
+    const pythonScript = this.normalizeScript(parsedSafe.python_script || parsedSafe.pythonScript || "");
+    const journal = typeof parsedSafe.journal === "object" && parsedSafe.journal ? parsedSafe.journal : {};
     let what = String(journal.what || "");
     let why = String(journal.why || "");
     let learnings = String(journal.learnings || "");
 
-    let nextSleep = parsed.next_sleep_seconds || this.config.loopSleepSeconds;
+    let nextSleep = parsedSafe.next_sleep_seconds || this.config.loopSleepSeconds;
     nextSleep = Number.isFinite(Number(nextSleep)) ? Number(nextSleep) : this.config.loopSleepSeconds;
 
     const planLines = this.normalizeList(plan);
@@ -97,9 +98,16 @@ class Agent {
       commandList = commandList.slice(0, this.config.maxCommandsPerCycle);
     }
 
-    if (!what) what = "LLM连接失败，请检查服务状态。";
-    if (!why) why = "LLM连接失败，请检查服务状态。";
-    if (!learnings) learnings = "LLM连接失败，请检查服务状态。";
+    const rawText = String(rawResponse || "").trim();
+    const missingJournal = !String(what).trim() || !String(why).trim() || !String(learnings).trim();
+    if (!parsed || missingJournal) {
+      this.logger?.warn("llm.output.invalid", { parsed: Boolean(parsed), missingJournal });
+      if (rawText) {
+        this.appendCommandStream("[llm.raw]\n");
+        this.appendCommandStream(`${truncate(rawText, 4000)}\n\n`);
+      }
+    }
+
 
     this.resetCommandStream();
     let commandResults = [];
