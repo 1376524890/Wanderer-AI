@@ -22,6 +22,7 @@
 ├── src/                 # 核心逻辑
 ├── journal/             # AI 探索日志（自动生成）
 ├── state/               # 运行时状态（可清空）
+├── logs/                # 运行日志（自动滚动）
 ├── run-agent.js         # 主循环入口
 ├── run-monitor.js       # 监控界面入口
 ├── start.sh             # 一键启动脚本
@@ -72,10 +73,16 @@ npm run start:all
 ## 配置说明（.env）
 常用项：
 - `VLLM_BASE_URL` / `VLLM_MODEL`：模型地址与名称
+- `VLLM_BASE_URL` 建议包含 `http://` 或 `https://`（未写会自动补全）
 - `ALLOW_COMMAND_EXECUTION`：是否允许命令执行
 - `ALLOW_UNSAFE_COMMANDS`：是否允许不受限制的命令
 - `MAX_COMMANDS_PER_CYCLE`：每轮最大命令数，`0` 表示无限制
 - `LOOP_SLEEP_SECONDS`：每轮循环间隔
+- `LOG_FILE` / `LOG_MAX_BYTES` / `LOG_MAX_FILES`：日志文件与滚动策略
+
+## 日志说明
+- 运行日志默认写入 `logs/wanderer.log`
+- 单文件达到 `LOG_MAX_BYTES` 后自动滚动，保留最近 `LOG_MAX_FILES` 份
 
 ## 文档与维护约定
 - 所有代码文件头部必须有 5 行左右职责声明

@@ -22,13 +22,13 @@ class Journal {
     const entry = [
       `## ${time}`,
       "",
-      "**做了什么**",
+      "**What I Did**",
       String(what || "").trim(),
       "",
-      "**为什么这样做**",
+      "**Why I Did It**",
       String(why || "").trim(),
       "",
-      "**收获了什么**",
+      "**What I Learned**",
       String(learnings || "").trim(),
       "",
       ""
@@ -39,12 +39,12 @@ class Journal {
   }
 
   readRecentContext(maxChars) {
-    if (!fs.existsSync(this.journalDir)) return "(暂无历史日志)";
+    if (!fs.existsSync(this.journalDir)) return "(No history yet)";
     const files = fs.readdirSync(this.journalDir)
       .filter((name) => name.endsWith(".md") && name !== "README.md")
       .sort()
       .map((name) => path.join(this.journalDir, name));
-    if (!files.length) return "(暂无历史日志)";
+    if (!files.length) return "(No history yet)";
 
     const collected = [];
     let remaining = maxChars;

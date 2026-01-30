@@ -22,6 +22,8 @@ class Monitor {
   run() {
     const screen = blessed.screen({
       smartCSR: true,
+      fullUnicode: true,
+      autoPadding: true,
       title: "Wanderer AI Console"
     });
 

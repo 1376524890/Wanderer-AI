@@ -2,7 +2,7 @@
 不负责：渲染监控界面。
 输入：配置、日志历史与模型响应。
 输出：更新日志条目、状态文件与可选命令结果。
-关联：src/llmClient.js, src/journal.js, src/monitor.js。
+关联：src/llmClient.js, src/journal.js, src/logger.js。
 */
 
 const fs = require("fs");
@@ -19,10 +19,11 @@ function sleep(seconds) {
 }
 
 class Agent {
-  constructor(config) {
+  constructor(config, logger) {
     this.config = config;
+    this.logger = logger;
     this.journal = new Journal(config.journalDir);
-    this.llm = new LlmClient(config);
+    this.llm = new LlmClient(config, logger);
     ensureDir(config.stateDir);
     this.statusPath = path.join(config.stateDir, "status.json");
     this.lastCommandsPath = path.join(config.stateDir, "last_commands.md");
@@ -45,19 +46,21 @@ class Agent {
   }
 
   async runForever() {
-    console.log("代理启动，持续运行中...");
+    this.logger?.info("agent.start", { pid: process.pid });
     while (true) {
       this.cycle += 1;
       let error = "";
       let summary = "";
       let sleepSeconds = this.config.loopSleepSeconds;
       try {
+        this.logger?.info("agent.cycle.start", { cycle: this.cycle });
         const result = await this.runCycle();
         summary = result.summary;
         sleepSeconds = result.sleepSeconds;
+        this.logger?.info("agent.cycle.end", { cycle: this.cycle, sleepSeconds });
       } catch (err) {
         error = err && err.message ? err.message : String(err);
-        console.error("Cycle failed:", err);
+        this.logger?.error("agent.cycle.error", { cycle: this.cycle, error });
       }
       this.writeStatus(summary, error, sleepSeconds);
       await sleep(sleepSeconds);
@@ -117,7 +120,6 @@ class Agent {
       "utf8"
     );
 
-    console.log(`Cycle ${this.cycle} 完成，日志已更新：${filePath}`);
     return { summary, sleepSeconds: Math.max(1, nextSleep) };
   }
 
@@ -138,13 +140,17 @@ class Agent {
     for (const command of commands) {
       if (!command.trim()) continue;
       if (!this.isCommandAllowed(command)) {
+        this.logger?.warn("command.blocked", { command });
         results.push({ command, status: "blocked", output: "Command blocked" });
         continue;
       }
       try {
+        this.logger?.info("command.start", { command });
         const output = await this.execCommand(command);
+        this.logger?.info("command.end", { command, status: output.status });
         results.push({ command, status: output.status, output: output.output });
       } catch (err) {
+        this.logger?.error("command.error", { command, error: err.message || String(err) });
         results.push({ command, status: "error", output: err.message || String(err) });
       }
     }

@@ -38,7 +38,11 @@ function loadConfig() {
     commandTimeoutSeconds: parseIntValue(process.env.COMMAND_TIMEOUT_SECONDS, 60),
     journalDir: process.env.JOURNAL_DIR || "journal",
     stateDir: process.env.STATE_DIR || "state",
-    logLevel: process.env.LOG_LEVEL || "INFO"
+    logLevel: process.env.LOG_LEVEL || "INFO",
+    logDir: process.env.LOG_DIR || "logs",
+    logFile: process.env.LOG_FILE || "",
+    logMaxBytes: parseIntValue(process.env.LOG_MAX_BYTES, 5 * 1024 * 1024),
+    logMaxFiles: parseIntValue(process.env.LOG_MAX_FILES, 5)
   };
 }
 
