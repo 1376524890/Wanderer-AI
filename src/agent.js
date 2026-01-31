@@ -35,6 +35,7 @@ class Agent {
     this.goalPath = path.join(config.stateDir, "current_goal.json");
     this.goalHistoryPath = path.join(config.stateDir, "goal_history.json");
     this.tokenStatsPath = path.join(config.stateDir, "token_stats.json");
+    this.creativeBriefPath = config.creativeBriefPath;
     ensureDir(path.dirname(this.llmRawLogPath));
     this.cycle = 0;
     this.allowlistPatterns = this.buildAllowlist(config.commandAllowlist || []);
@@ -77,14 +78,27 @@ class Agent {
 
   async runCycle() {
     this.resetCommandStream();
-    const loadedGoal = this.loadGoal();
+    let loadedGoal = this.loadGoal();
+    if (loadedGoal && this.config.creativeOnly && this.isGoalAvoided(loadedGoal)) {
+      this.logger?.warn("goal.ignored", { reason: "avoid-keywords", goal: loadedGoal });
+      loadedGoal = null;
+    }
     const journalContext = this.journal.readRecentContext(this.config.contextMaxChars);
     const commandContext = readTail(this.lastCommandsPath, this.config.contextMaxChars);
     const goalContext = loadedGoal ? `\n\n当前目标：\n${JSON.stringify(loadedGoal, null, 2)}` : "";
+    const workdir = process.cwd();
+    const creativeBrief = this.readCreativeBrief();
+    const recentGoals = this.readRecentGoals(this.config.goalRecentLimit);
+    const recentGoalsText = recentGoals.length
+      ? recentGoals.map((goal, idx) => `${idx + 1}. ${goal.title} — ${goal.description}`).join("\n")
+      : "(无)";
     const userPrompt = USER_PROMPT_TEMPLATE
       .replace("{journal_context}", journalContext)
       .replace("{command_context}", commandContext || "(暂无命令输出)")
-      .replace("{goal_context}", goalContext);
+      .replace("{goal_context}", goalContext)
+      .replace("{workdir}", workdir)
+      .replace("{creative_brief}", creativeBrief || "(无)")
+      .replace("{recent_goals}", recentGoalsText);
 
     let rawResponse = "";
     let llmError = "";
@@ -139,19 +153,45 @@ class Agent {
       return planFirstStep.includes(kw);
     });
 
+    let blockedReason = "";
+    let policyBlockedReason = "";
     if (isDiagnosticFirst && !llmError && parsedInfo.data) {
+      blockedReason = `禁止以诊断/检查类操作作为第一步: ${planFirstStep}`;
       this.logger?.warn("plan.diagnostic.blocked", { firstStep: planFirstStep });
       this.appendCommandStream("[blocked] 禁止以诊断/检查类操作作为第一步\n");
       this.appendCommandStream(`first_step: ${planFirstStep}\n`);
-      parsedInfo.data = null;
     }
 
-    if (!currentGoal) {
+    if (!currentGoal && !blockedReason) {
       if (!llmError && parsedInfo.data) {
+        blockedReason = "必须明确 current_goal";
         this.logger?.warn("plan.no_current_goal", {});
         this.appendCommandStream("[blocked] 必须明确 current_goal\n");
-        parsedInfo.data = null;
       }
+    }
+
+    if (!blockedReason) {
+      const policyBlock = this.checkGoalPolicy(currentGoal, loadedGoal, recentGoals);
+      if (policyBlock) {
+        blockedReason = policyBlock;
+        policyBlockedReason = policyBlock;
+        this.logger?.warn("goal.policy.blocked", { reason: policyBlock });
+        this.appendCommandStream(`[blocked] ${policyBlock}\n`);
+      }
+    }
+
+    if (blockedReason) {
+      if (!String(nowWork).trim()) {
+        nowWork = `阻止不合规计划：${blockedReason}`;
+      }
+      if (!String(outcomes).trim()) {
+        outcomes = "未执行任何命令或脚本。";
+      }
+      if (!String(nextPlan).trim()) {
+        nextPlan = "下一轮需生成合规且创作导向的目标与行动。";
+      }
+      commandList = [];
+      pythonScript = "";
     }
 
     const rawText = String(rawResponse || "").trim();
@@ -223,11 +263,14 @@ class Agent {
     const { filePath, entry } = this.journal.appendEntry(nowWork, outcomes, nextPlan);
     fs.writeFileSync(this.lastJournalPath, entry, "utf8");
 
-    if (currentGoal && currentGoal.phase === "completed") {
-      this.archiveGoal(currentGoal);
-      this.appendCommandStream(`[goal.completed] ${currentGoal.title}\n`);
-    } else if (currentGoal) {
-      this.saveGoal(currentGoal);
+    const allowGoalPersistence = !policyBlockedReason;
+    if (allowGoalPersistence) {
+      if (currentGoal && currentGoal.phase === "completed") {
+        this.archiveGoal(currentGoal);
+        this.appendCommandStream(`[goal.completed] ${currentGoal.title}\n`);
+      } else if (currentGoal) {
+        this.saveGoal(currentGoal);
+      }
     }
 
     if (llmUsage) {
@@ -278,6 +321,68 @@ class Agent {
     if (typeof value !== "string") return "";
     const trimmed = value.trim();
     return trimmed ? trimmed : "";
+  }
+
+  readCreativeBrief() {
+    if (this.creativeBriefPath && fs.existsSync(this.creativeBriefPath)) {
+      try {
+        const content = fs.readFileSync(this.creativeBriefPath, "utf8");
+        return content.trim();
+      } catch (err) {
+        return "";
+      }
+    }
+    return String(process.env.CREATIVE_BRIEF || "").trim();
+  }
+
+  readRecentGoals(limit) {
+    if (!fs.existsSync(this.goalHistoryPath)) return [];
+    try {
+      const raw = fs.readFileSync(this.goalHistoryPath, "utf8");
+      const history = JSON.parse(raw);
+      if (!Array.isArray(history)) return [];
+      const count = Math.max(0, Number(limit) || 0);
+      if (!count) return [];
+      return history.slice(-count).reverse().map((goal) => ({
+        id: String(goal.id || ""),
+        title: String(goal.title || ""),
+        description: String(goal.description || "")
+      }));
+    } catch (err) {
+      return [];
+    }
+  }
+
+  isGoalAvoided(goal) {
+    if (!goal) return false;
+    const goalText = `${goal.title || ""} ${goal.description || ""}`.toLowerCase();
+    const avoidKeywords = Array.isArray(this.config.goalAvoidKeywords)
+      ? this.config.goalAvoidKeywords
+      : [];
+    return avoidKeywords.some((kw) => kw && goalText.includes(String(kw).toLowerCase()));
+  }
+
+  checkGoalPolicy(currentGoal, loadedGoal, recentGoals) {
+    if (!currentGoal || !this.config.creativeOnly) return "";
+    const isNewGoal = !loadedGoal || loadedGoal.id !== currentGoal.id;
+    const goalText = `${currentGoal.title || ""} ${currentGoal.description || ""}`.toLowerCase();
+    if (this.isGoalAvoided(currentGoal)) {
+      return "目标命中运维/工具类关键词，已阻止并要求创作型目标";
+    }
+
+    if (isNewGoal && Array.isArray(recentGoals) && recentGoals.length) {
+      const normalized = goalText.replace(/\s+/g, "");
+      const repeated = recentGoals.some((goal) => {
+        const title = String(goal.title || "").toLowerCase().replace(/\s+/g, "");
+        const desc = String(goal.description || "").toLowerCase().replace(/\s+/g, "");
+        return (title && normalized.includes(title)) || (desc && normalized.includes(desc));
+      });
+      if (repeated) {
+        return "新目标与近期目标高度重复，已阻止并要求显著不同的创作主题";
+      }
+    }
+
+    return "";
   }
 
   parseWithDiagnostics(raw) {
@@ -519,6 +624,10 @@ class Agent {
       strippedThink = true;
       const firstBrace = cleaned.indexOf("{");
       cleaned = (firstBrace !== -1 ? cleaned.slice(firstBrace) : cleaned).replace(/<think>/gi, "").trim();
+    }
+    const fenceMatch = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    if (fenceMatch) {
+      cleaned = fenceMatch[1].trim();
     }
     return { cleaned, strippedThink };
   }

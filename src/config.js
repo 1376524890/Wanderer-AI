@@ -5,6 +5,7 @@
 关联：src/agent.js, src/llmClient.js, src/monitor.js。
 */
 
+const path = require("path");
 const dotenv = require("dotenv");
 const { parseBool, parseFloatValue, parseIntValue } = require("./utils");
 
@@ -15,6 +16,20 @@ function loadConfig() {
   const allowlist = commandAllowlistRaw
     ? commandAllowlistRaw.split(",").map((item) => item.trim()).filter(Boolean)
     : [];
+
+  const defaultAvoidKeywords = [
+    "日志", "log", "监控", "monitor", "备份", "backup", "运维", "ops",
+    "系统", "system", "诊断", "debug", "排查", "巡检", "ssh", "rsync",
+    "docker", "容器", "cpu", "内存", "磁盘", "network", "syslog"
+  ].join(",");
+
+  const goalAvoidKeywords = (process.env.GOAL_AVOID_KEYWORDS || defaultAvoidKeywords)
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  const stateDir = process.env.STATE_DIR || "state";
+  const defaultCreativeBriefPath = "creative_brief.md";
 
   return {
     vllmBaseUrl: process.env.VLLM_BASE_URL || "https://open.bigmodel.cn/api/paas/v4",
@@ -31,6 +46,10 @@ function loadConfig() {
     retryJitterSeconds: parseFloatValue(process.env.RETRY_JITTER_SECONDS, 1.5),
     loopSleepSeconds: parseIntValue(process.env.LOOP_SLEEP_SECONDS, 10),
     contextMaxChars: parseIntValue(process.env.CONTEXT_MAX_CHARS, 6000),
+    creativeOnly: parseBool(process.env.CREATIVE_ONLY, true),
+    creativeBriefPath: process.env.CREATIVE_BRIEF_PATH || defaultCreativeBriefPath,
+    goalAvoidKeywords,
+    goalRecentLimit: parseIntValue(process.env.GOAL_RECENT_LIMIT, 6),
     allowCommandExecution: parseBool(process.env.ALLOW_COMMAND_EXECUTION, true),
     allowUnsafeCommands: parseBool(process.env.ALLOW_UNSAFE_COMMANDS, true),
     commandAllowlist: allowlist,
@@ -38,7 +57,7 @@ function loadConfig() {
     commandTimeoutSeconds: parseIntValue(process.env.COMMAND_TIMEOUT_SECONDS, 300),
     pythonBin: process.env.PYTHON_BIN || "python3",
     journalDir: process.env.JOURNAL_DIR || "journal",
-    stateDir: process.env.STATE_DIR || "state",
+    stateDir,
     logLevel: process.env.LOG_LEVEL || "INFO",
     logDir: process.env.LOG_DIR || "logs",
     logFile: process.env.LOG_FILE || "",

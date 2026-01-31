@@ -102,6 +102,10 @@ npm run start:all
   - 获取地址：https://open.bigmodel.cn/
 - `VLLM_BASE_URL` 建议包含 `http://` 或 `https://`（未写会自动补全）
 - 如需使用本地 vLLM，设置为本地地址（如 `http://localhost:8000`）
+- `CREATIVE_ONLY`：是否强制创作型目标（建议为 `true`）
+- `CREATIVE_BRIEF_PATH`：创作简报文件路径（默认 `creative_brief.md`）
+- `GOAL_AVOID_KEYWORDS`：运维/工具类关键词黑名单（逗号分隔）
+- `GOAL_RECENT_LIMIT`：避免重复的近期目标窗口大小
 - `ALLOW_COMMAND_EXECUTION`：是否允许命令执行
 - `ALLOW_UNSAFE_COMMANDS`：是否允许不受限制的命令
 - `MAX_COMMANDS_PER_CYCLE`：每轮最大命令数，`0` 表示无限制
