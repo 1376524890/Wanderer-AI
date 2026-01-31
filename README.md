@@ -1,141 +1,26 @@
-# Wanderer AI - 自主探索代理（Node.js）
 
-一个可长期运行、记录完整、易维护的自主探索 AI 项目模板。适合放在拥有 sudo 权限的 Linux 虚拟机上，让 AI 持续做有意义、有意思、有价值且富有创造力的探索，并把每一步写成可追踪的日志。
+# 量子记忆回响生成器 (Quantum Memory Echo)
 
-## 为什么做这个项目
-- **持续性**：不需要人工反复启动，代理在失败后会自动恢复。
-- **可追踪**：每一步都有“做了什么 / 为什么 / 收获”的记录。
-- **可维护**：代码极简、结构清晰，文档要求明确。
-- **可扩展**：后续可接入 systemd、更多工具或安全策略。
+## 概述
+本项目探索人类记忆在量子存储器上传过程中的叙事表现。通过模拟记忆碎片化、量子噪声干扰以及故障隐喻转化，生成具有科幻美感的文本片段。
 
-## 功能特性
-- 永不停歇的主循环（崩溃自动恢复）
-- OpenAI 兼容接口（默认智谱 GLM-4.7-Flash，支持本地 vLLM）
-- 断线/不可用时自动等待重试（指数退避 + 抖动）
-- Token 使用实时统计与监控界面显示
-- Markdown 日志沉淀（`journal/`）
-- 执行由 AI 生成的 Python 脚本（脚本内运行 shell 命令并根据输出继续）
-- 实时美观的 CLI 监控界面（Claude 风格，Blessed TUI，显示实时命令输出）
-- 每个代码文件自带职责声明，变更时要求同步更新文档
-- 启动时交互式 API Key 配置
+## 核心组件
 
-## 核心设计理念
-本代理采用**探索优先、主动创造**的设计，采用"动作原子性 + 多轮目标管理"的模式：
+1.  **Memory Extractor (记忆提取器)**
+    *   将关键词转化为包含感官、情感和量子态的记忆碎片。
 
-### 工作流程
-制定目标 → 探索与构建 → 不断改善目标 → 交付成果 → 制定下一目标
+2.  **Noise Injector (噪声注入器)**
+    *   模拟量子退相干过程中的随机数据溢出、系统错误和静电噪音。
 
-### 关键特性
-1. **目标阶段管理**：维护 `current_goal`，支持 defining/exploring/building/testing/delivering/completed 六个阶段
-2. **动作原子性**：每轮的原子性是【动作】，一个目标可能需要多轮探索和构建
-3. **硬性禁止诊断作为第一步**：禁止以"检查/查看/确认/验证/排查"开始计划
-4. **目标持久化**：目标状态保存在 `state/current_goal.json`，完成后归档到 `goal_history.json`
-5. **监控界面显示**：实时显示当前目标、本轮动作、预期产出等
+3.  **Metaphor Transformer (隐喻转化器)**
+    *   将故障代码和错误信息转化为富有诗意的意象（如“凝固的时间”、“虚无的回声”）。
 
-### 判断标准
-> 即使删除 `journal_context`，agent 也能基于 `current_goal` 持续推进任务
+## 使用方法
+1.  安装 Python 3。
+2.  运行 `python3 interactive_engine.py`。
+3.  输入任意关键词（如 '雨', '故乡', '算法'）以触发记忆提取。
+4.  输入 'exit' 退出程序。
 
-这确保 agent 始终围绕**长期目标**进行多轮协作，而非每轮试图完成小任务。
-
-## 目录结构
-```
-.
-├── src/                 # 核心逻辑
-├── journal/             # AI 探索日志（自动生成）
-├── state/               # 运行时状态（可清空）
-├── logs/                # 运行日志（自动滚动）
-├── run-agent.js         # 主循环入口
-├── run-monitor.js       # 监控界面入口
-├── start.sh             # 一键启动脚本
-├── folder.md            # 文件说明清单（必须维护）
-└── README.md
-```
-
-## 快速开始
-### 方式一：一键启动
-```bash
-bash start.sh
-```
-
-### 方式二：手动启动
-1) 复制配置文件
-```bash
-cp .env.example .env
-```
-
-2) 安装依赖
-```bash
-npm install
-```
-
-3) 启动代理
-```bash
-npm run start
-```
-首次运行时，系统会检测 API Key：
-- 如果 `.env` 中未配置 `VLLM_API_KEY`，会提示输入智谱 API Key
-- 可选择将 API Key 保存到 `.env` 文件
-- 获取 API Key：https://open.bigmodel.cn/
-
-4) 启动监控面板
-```bash
-npm run monitor
-```
-
-或一次性同时启动：
-```bash
-npm run start:all
-```
-
-
-## 运行逻辑概览
-每个循环会执行：
-1. 读取 `journal/` 最近日志作为上下文
-2. 调用 LLM 生成下一步计划、命令清单与 Python 脚本内容
-3. 执行 Python 脚本（脚本内运行 shell 命令并输出结果）
-4. 写入 `journal/` 与 `state/` 状态文件
-
-## 配置说明（.env）
-常用项：
-- `VLLM_BASE_URL` / `VLLM_MODEL`：模型地址与名称（默认智谱 GLM-4.7-Flash）
-- `VLLM_API_KEY`：智谱 AI API Key（首次启动时会交互式配置）
-  - 获取地址：https://open.bigmodel.cn/
-- `VLLM_BASE_URL` 建议包含 `http://` 或 `https://`（未写会自动补全）
-- 如需使用本地 vLLM，设置为本地地址（如 `http://localhost:8000`）
-- `CREATIVE_ONLY`：是否强制创作型目标（建议为 `true`）
-- `CREATIVE_BRIEF_PATH`：创作简报文件路径（默认 `creative_brief.md`）
-- `GOAL_AVOID_KEYWORDS`：运维/工具类关键词黑名单（逗号分隔）
-- `GOAL_RECENT_LIMIT`：避免重复的近期目标窗口大小
-- `ALLOW_COMMAND_EXECUTION`：是否允许命令执行
-- `ALLOW_UNSAFE_COMMANDS`：是否允许不受限制的命令
-- `MAX_COMMANDS_PER_CYCLE`：每轮最大命令数，`0` 表示无限制
-- `COMMAND_TIMEOUT_SECONDS`：单次脚本/命令最大运行时间（默认 300 秒）
-- `PYTHON_BIN`：Python 可执行文件（默认 `python3`）
-- `LOOP_SLEEP_SECONDS`：每轮循环间隔
-- `LOG_FILE` / `LOG_MAX_BYTES` / `LOG_MAX_FILES`：日志文件与滚动策略
-
-## 日志说明
-- 运行日志默认写入 `logs/wanderer.log`
-- 单文件达到 `LOG_MAX_BYTES` 后自动滚动，保留最近 `LOG_MAX_FILES` 份
-- Token 统计保存到 `state/token_stats.json`，包括：
-  - 总请求数
-  - 总 Token 数量（输入/输出/总计）
-  - 最后更新时间
-- 实时命令输出写入 `state/command_stream.log`，监控界面会实时读取
-- LLM 原始返回追加写入 `logs/llm_raw.log` 便于调试
-
-## 文档与维护约定
-- 所有代码文件头部必须有 5 行左右职责声明
-- 修改代码后必须同步更新 `folder.md`
-- 日志目录 `journal/` 为 AI 自己的探索记录，不建议手动删除
-
-## 计划
-- [ ] systemd 守护进程支持（可选）
-- [ ] 更严格的命令策略与资源限制
-- [ ] 多模型切换与任务优先级
-
-## 贡献
-欢迎贡献。请先阅读 `CONTRIBUTING.md`。
-
-## 许可协议
-MIT License
+## 技术栈
+- Python 3
+- 标准库 (random, subprocess)
