@@ -1,7 +1,7 @@
-/* 用途：启动自主探索代理主循环的 CLI 入口。
+/* 用途：启动双代理辩论主循环的 CLI 入口。
 不负责：渲染监控界面。
 输入：来自 .env 的环境变量。
-输出：运行代理直到被中断。
+输出：运行辩论直到被中断。
 关联：src/agent.js, src/config.js, src/logger.js。
 */
 
@@ -10,7 +10,7 @@ const path = require("path");
 const readline = require("readline");
 const { loadConfig } = require("./src/config");
 const { createLogger } = require("./src/logger");
-const { Agent } = require("./src/agent");
+const { DebateAgent } = require("./src/agent");
 
 const ENV_FILE = ".env";
 
@@ -65,19 +65,20 @@ function checkApiKey(config) {
 async function main() {
   let config = loadConfig();
 
-  console.log("\n🚀 Wanderer AI - 自主探索代理\n");
+  console.log("\n🗣️  Debate Agents - 双代理永续辩论\n");
   console.log(`📌 配置:`);
   console.log(`   - API: ${config.vllmBaseUrl}`);
   console.log(`   - Model: ${config.vllmModel}`);
   console.log(`   - API Key: ${config.vllmApiKey ? "***" + config.vllmApiKey.slice(-4) : "未设置"}`);
+  console.log(`   - 身份更新间隔: ${config.identityUpdateInterval} 轮`);
   console.log("");
 
   config = await checkApiKey(config);
 
   const logger = createLogger(config);
-  const agent = new Agent(config, logger);
+  const agent = new DebateAgent(config, logger);
 
-  console.log("\n✅ 代理已启动，正在运行...\n");
+  console.log("\n✅ 辩论引擎已启动，正在运行...\n");
   await agent.runForever();
 }
 

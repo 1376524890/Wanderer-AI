@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 用途：一键创建环境、安装依赖并启动代理。
+# 用途：一键创建环境、安装依赖并启动辩论引擎。
 # 不负责：替代 systemd 或进程守护。
 # 输入：当前目录与可选 .env 配置。
 # 输出：依赖安装日志与代理进程。
@@ -27,5 +27,5 @@ fi
 echo "安装 Node.js 依赖..."
 npm install
 
-echo "启动代理 + 监控面板（npm run start:all）..."
+echo "启动辩论引擎 + 监控面板（npm run start:all）..."
 npm run start:all

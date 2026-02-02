@@ -1,7 +1,7 @@
 {
   "name": "wanderer-ai",
   "version": "0.1.0",
-  "description": "自主探索 AI 代理（Node.js 版）",
+  "description": "双代理永续辩论系统（Node.js 版）",
   "private": true,
   "main": "run-agent.js",
   "engines": {
