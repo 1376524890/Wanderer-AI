@@ -133,13 +133,14 @@ class Monitor {
 
   renderHeader(status) {
     const nowText = formatUtc8();
-    const round = status.round !== undefined ? status.round : "-";
     const topic = status.topic ? truncate(status.topic, 60) : "-";
-    const lastReply = status.last_reply_at ? this.formatUtc8FromIso(status.last_reply_at) : "-";
-    return ` 时间: ${nowText} | 轮次: ${round} | 主题: ${topic} | 上次回复: ${lastReply}`;
+    return ` 时间: ${nowText} | 主题: ${topic}`;
   }
 
   renderFooter(status) {
+    const round = status.round !== undefined ? status.round : "-";
+    const lastReply = status.last_reply_at ? this.formatUtc8FromIso(status.last_reply_at) : "-";
+
     const api = status.api_status || {};
     const apiState = api.ok ? "OK" : "FAIL";
     const latency = api.last_latency_ms ? `${api.last_latency_ms}ms` : "-";
@@ -150,7 +151,7 @@ class Monitor {
     const requests = tokenStats.requests || 0;
     const tokenInfo = requests ? `${this.formatNumber(totalTokens)} (${requests} req)` : "-";
 
-    return ` API: ${apiState} | Latency: ${latency} | Tokens: ${tokenInfo} ${apiError ? `| LastError: ${apiError}` : ""}`;
+    return ` 轮次: ${round} | 上次回复: ${lastReply} | API: ${apiState} | Latency: ${latency} | Tokens: ${tokenInfo} ${apiError ? `| LastError: ${apiError}` : ""}`;
   }
 
   formatUtc8FromIso(iso) {

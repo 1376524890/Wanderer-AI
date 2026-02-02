@@ -14,6 +14,68 @@ const { DebateAgent } = require("./src/agent");
 
 const ENV_FILE = ".env";
 
+function isProcessAlive(pid) {
+  if (!pid || !Number.isFinite(Number(pid))) return false;
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+function acquireLock(lockPath) {
+  const payload = JSON.stringify({ pid: process.pid, started_at: new Date().toISOString() }, null, 2);
+  try {
+    const fd = fs.openSync(lockPath, "wx");
+    fs.writeFileSync(fd, payload, "utf8");
+    fs.closeSync(fd);
+    return true;
+  } catch (err) {
+    if (err.code !== "EEXIST") throw err;
+  }
+
+  let existing = null;
+  try {
+    existing = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+  } catch (err) {
+    existing = null;
+  }
+
+  if (existing && isProcessAlive(existing.pid)) {
+    console.log(`\n⚠️  检测到已有运行中的辩论进程 (pid ${existing.pid})。为避免 API 并发限制，本次启动已取消。`);
+    console.log("如需重新启动，请先停止已有进程或删除锁文件。\n");
+    return false;
+  }
+
+  fs.writeFileSync(lockPath, payload, "utf8");
+  return true;
+}
+
+function setupLockCleanup(lockPath) {
+  const cleanup = () => {
+    try {
+      if (fs.existsSync(lockPath)) fs.unlinkSync(lockPath);
+    } catch (err) {
+      // ignore cleanup errors
+    }
+  };
+
+  process.on("exit", cleanup);
+  process.on("SIGINT", () => {
+    cleanup();
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    cleanup();
+    process.exit(0);
+  });
+  process.on("uncaughtException", (err) => {
+    cleanup();
+    throw err;
+  });
+}
+
 function checkApiKey(config) {
   if (!config.vllmApiKey || config.vllmApiKey === "your-zhipu-api-key-here") {
     console.log("\n⚠️  未检测到有效的 ZHIPU_API_KEY");
@@ -64,6 +126,12 @@ function checkApiKey(config) {
 
 async function main() {
   let config = loadConfig();
+  fs.mkdirSync(config.stateDir, { recursive: true });
+  const lockPath = path.join(config.stateDir, "agent.lock");
+  if (!acquireLock(lockPath)) {
+    process.exit(1);
+  }
+  setupLockCleanup(lockPath);
 
   console.log("\n🗣️  Debate Agents - 双代理永续辩论\n");
   console.log(`📌 配置:`);

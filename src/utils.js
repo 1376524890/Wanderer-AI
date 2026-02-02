@@ -61,8 +61,7 @@ function safeJsonExtract(raw) {
 }
 
 function formatUtc8(date = new Date()) {
-  const utcMs = date.getTime() + date.getTimezoneOffset() * 60000;
-  const utc8 = new Date(utcMs + 8 * 60 * 60 * 1000);
+  const utc8 = new Date(date.getTime() + 8 * 60 * 60 * 1000);
   const pad = (value) => String(value).padStart(2, "0");
   const yyyy = utc8.getUTCFullYear();
   const mm = pad(utc8.getUTCMonth() + 1);
