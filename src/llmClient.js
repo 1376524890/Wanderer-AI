@@ -29,7 +29,7 @@ class LlmClient {
       throw new Error("VLLM_BASE_URL is empty");
     }
     const isLocalVllm = this.isLocalAddress(baseUrl);
-    const apiKey = this.config.vllmApiKey || (isLocalVllm ? "EMPTY" : "");
+    const apiKey = this.config.vllmApiKey || this.config.nvidiaApiKey || (isLocalVllm ? "EMPTY" : "");
 
     if (baseUrl !== this.config.vllmBaseUrl) {
       this.logger?.warn("llm.base_url.normalized", {
@@ -128,7 +128,7 @@ class LlmClient {
 
     while (true) {
       try {
-        const response = await this.client.chat.completions.create({
+        const payload = {
           model: this.config.vllmModel,
           messages: [
             { role: "system", content: systemPrompt },
@@ -137,7 +137,13 @@ class LlmClient {
           temperature: this.config.temperature,
           top_p: this.config.topP,
           max_tokens: this.config.maxTokens
-        });
+        };
+
+        if (this.config.openaiExtraBody && Object.keys(this.config.openaiExtraBody).length > 0) {
+          payload.extra_body = this.config.openaiExtraBody;
+        }
+
+        const response = await this.client.chat.completions.create(payload);
 
         if (!response || !response.choices || !response.choices[0] || !response.choices[0].message) {
           throw new Error("Unexpected LLM response format");

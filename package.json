@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node run-agent.js",
     "monitor": "node run-monitor.js",
-    "start:all": "node run-monitor.js & node run-agent.js"
+    "web": "node run-web.js",
+    "start:all": "node run-monitor.js & node run-agent.js & node run-web.js"
   },
   "dependencies": {
     "blessed": "^0.1.81",

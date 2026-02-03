@@ -17,6 +17,176 @@ function sleep(seconds) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(1, seconds) * 1000));
 }
 
+function buildDebateFlow(freeRounds) {
+  const safeFreeRounds = Math.max(1, Number.isFinite(freeRounds) ? freeRounds : 4);
+  const flow = [
+    {
+      key: "opening",
+      title: "陈词阶段-立论陈词",
+      rule: "正方一辩陈词3分钟，反方一辩陈词3分钟。",
+      order: "A",
+      roles: { A: "正方一辩", B: "反方一辩" },
+      tasks: {
+        A: "进行立论陈词，给出立场、定义、核心论点与证据。",
+        B: "进行立论陈词，明确反方立场并指出正方核心漏洞。"
+      }
+    },
+    {
+      key: "cross_1",
+      title: "攻辩阶段-正方二辩提问",
+      rule: "正方二辩提问，反方二辩或三辩回答；提问30秒，回答1分钟。",
+      order: "A",
+      roles: { A: "正方二辩(提问)", B: "反方二辩/三辩(回答)" },
+      tasks: {
+        A: "提出1个尖锐问题，聚焦对方逻辑漏洞。",
+        B: "直接回答问题，给出清晰理由或证据。"
+      }
+    },
+    {
+      key: "cross_2",
+      title: "攻辩阶段-反方二辩提问",
+      rule: "反方二辩提问，正方二辩或三辩回答；提问30秒，回答1分钟。",
+      order: "B",
+      roles: { A: "正方二辩/三辩(回答)", B: "反方二辩(提问)" },
+      tasks: {
+        A: "直接回答问题，给出清晰理由或证据。",
+        B: "提出1个尖锐问题，聚焦对方逻辑漏洞。"
+      }
+    },
+    {
+      key: "cross_3",
+      title: "攻辩阶段-正方三辩提问",
+      rule: "正方三辩提问，反方二辩或三辩回答；提问30秒，回答1分钟。",
+      order: "A",
+      roles: { A: "正方三辩(提问)", B: "反方二辩/三辩(回答)" },
+      tasks: {
+        A: "提出1个尖锐问题，逼迫对方澄清或承认不足。",
+        B: "直接回答问题，避免回避或跑题。"
+      }
+    },
+    {
+      key: "cross_4",
+      title: "攻辩阶段-反方三辩提问",
+      rule: "反方三辩提问，正方二辩或三辩回答；提问30秒，回答1分钟。",
+      order: "B",
+      roles: { A: "正方二辩/三辩(回答)", B: "反方三辩(提问)" },
+      tasks: {
+        A: "直接回答问题，补强立场并避免新漏洞。",
+        B: "提出1个尖锐问题，推动对方自证。"
+      }
+    },
+    {
+      key: "cross_summary",
+      title: "攻辩阶段-攻辩小结",
+      rule: "四轮攻辩完毕后，正方一辩与反方一辩各作2分钟攻辩小结。",
+      order: "A",
+      roles: { A: "正方一辩(攻辩小结)", B: "反方一辩(攻辩小结)" },
+      tasks: {
+        A: "针对攻辩态势总结己方优势与对方漏洞，不背稿。",
+        B: "针对攻辩态势总结己方优势与对方漏洞，不背稿。"
+      }
+    }
+  ];
+
+  for (let i = 0; i < safeFreeRounds; i += 1) {
+    flow.push({
+      key: `free_${i + 1}`,
+      title: `自由辩论阶段-第${i + 1}轮`,
+      rule: "自由辩论由正方先发言，正反方轮流发言，共8分钟，每方4分钟。",
+      order: "A",
+      roles: { A: "正方自由辩", B: "反方自由辩" },
+      tasks: {
+        A: "回应对方最新观点并推进己方核心论点。",
+        B: "回应对方最新观点并推进己方核心论点。"
+      }
+    });
+  }
+
+  flow.push({
+    key: "closing",
+    title: "总结陈词阶段",
+    rule: "反方四辩总结陈词3分钟；正方四辩总结陈词3分钟。",
+    order: "B",
+    roles: { A: "正方四辩(总结陈词)", B: "反方四辩(总结陈词)" },
+    tasks: {
+      A: "最终总结，回扣核心论点与全场关键对抗点。",
+      B: "最终总结，回扣核心论点与全场关键对抗点。"
+    }
+  });
+
+  return flow;
+}
+
+function normalizeOp(op) {
+  const raw = String(op || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (["add", "新增", "添加", "补充"].includes(raw)) return "add";
+  if (["del", "delete", "remove", "删除", "移除"].includes(raw)) return "del";
+  if (["change", "update", "replace", "修改", "变更", "替换"].includes(raw)) return "change";
+  return raw;
+}
+
+function parseIdentityOps(updates) {
+  if (!Array.isArray(updates)) return [];
+  const ops = [];
+
+  for (const item of updates) {
+    if (typeof item === "string") {
+      const text = item.trim();
+      if (!text) continue;
+      const addMatch = text.match(/^(add|新增|添加|补充)\s*[:：]\s*(.+)$/i);
+      const delMatch = text.match(/^(del|delete|remove|删除|移除)\s*[:：]\s*(.+)$/i);
+      const changeMatch = text.match(/^(change|update|replace|修改|变更|替换)\s*[:：]\s*(.+?)(?:\s*->\s*|\s*=>\s*|→)\s*(.+)$/i);
+      if (changeMatch) {
+        ops.push({ op: "change", from: changeMatch[2].trim(), to: changeMatch[3].trim() });
+      } else if (delMatch) {
+        ops.push({ op: "del", text: delMatch[2].trim() });
+      } else if (addMatch) {
+        ops.push({ op: "add", text: addMatch[2].trim() });
+      } else {
+        ops.push({ op: "add", text });
+      }
+      continue;
+    }
+
+    if (item && typeof item === "object") {
+      const op = normalizeOp(item.op || item.action || item.type);
+      if (op === "add") {
+        const text = String(item.text || item.value || item.content || "").trim();
+        if (text) ops.push({ op, text });
+        continue;
+      }
+      if (op === "del") {
+        const text = String(item.text || item.value || item.content || "").trim();
+        if (text) ops.push({ op, text });
+        continue;
+      }
+      if (op === "change") {
+        const from = String(item.from || item.old || "").trim();
+        const to = String(item.to || item.new || item.text || "").trim();
+        if (from && to) ops.push({ op, from, to });
+        continue;
+      }
+    }
+  }
+
+  return ops;
+}
+
+function stripIdentityPrefix(line) {
+  const match = String(line || "").match(/^\s*-\s*\[[^\]]+\]\s*(.*)$/);
+  return match ? match[1].trim() : String(line || "").trim();
+}
+
+function formatIdentityLine(text, timestamp) {
+  return `- [${timestamp}] ${text}`;
+}
+
+function matchIdentityLine(lineText, query) {
+  if (!lineText || !query) return false;
+  return lineText.toLowerCase().includes(query.toLowerCase());
+}
+
 class DebateAgent {
   constructor(config, logger) {
     this.config = config;
@@ -35,10 +205,17 @@ class DebateAgent {
     this.identityAPath = path.join(identityDir, config.identityAFile || "identity_a.md");
     this.identityBPath = path.join(identityDir, config.identityBFile || "identity_b.md");
 
+    const experienceDir = config.experienceDir || config.stateDir;
+    ensureDir(experienceDir);
+    this.experiencePath = path.join(experienceDir, config.experienceFile || "experience.md");
+
     this.round = 0;
+    this.debateRound = 0;
+    this.debateId = 1;
     this.topic = "";
     this.lastReplyAt = null;
     this.tokenStats = this.loadTokenStats();
+    this.debateFlow = buildDebateFlow(config.freeDebateRounds);
 
     this.ensureIdentityFiles();
     this.loadState();
@@ -48,6 +225,7 @@ class DebateAgent {
     if (!fs.existsSync(this.identityAPath)) fs.writeFileSync(this.identityAPath, "", "utf8");
     if (!fs.existsSync(this.identityBPath)) fs.writeFileSync(this.identityBPath, "", "utf8");
     if (!fs.existsSync(this.conversationPath)) fs.writeFileSync(this.conversationPath, "", "utf8");
+    if (!fs.existsSync(this.experiencePath)) fs.writeFileSync(this.experiencePath, "", "utf8");
   }
 
   loadState() {
@@ -56,6 +234,8 @@ class DebateAgent {
       const raw = fs.readFileSync(this.statusPath, "utf8");
       const data = JSON.parse(raw);
       this.round = Number.isFinite(data.round) ? data.round : this.round;
+      this.debateRound = Number.isFinite(data.debate_round) ? data.debate_round : this.debateRound;
+      this.debateId = Number.isFinite(data.debate_id) ? data.debate_id : this.debateId;
       this.topic = typeof data.topic === "string" ? data.topic : this.topic;
       this.lastReplyAt = data.last_reply_at || this.lastReplyAt;
     } catch (err) {
@@ -83,7 +263,13 @@ class DebateAgent {
 
   async runRound() {
     const nextRound = this.round + 1;
-    const allowIdentityUpdate = nextRound % this.config.identityUpdateInterval === 0;
+    const currentDebateId = this.debateId;
+    const nextDebateRound = this.debateRound + 1;
+    const debateStep = this.debateFlow[nextDebateRound - 1] || this.debateFlow[this.debateFlow.length - 1];
+    const debateTotalRounds = this.debateFlow.length;
+    const isDebateStart = nextDebateRound === 1;
+    const isDebateEnd = nextDebateRound === debateTotalRounds;
+    const allowIdentityUpdate = true;
     const roundTopic = this.topic || "";
 
     this.log.appendRoundStart(nextRound, roundTopic);
@@ -91,53 +277,99 @@ class DebateAgent {
 
     const conversationContext = readTail(this.conversationPath, this.config.contextMaxChars);
 
-    const agentAResult = await this.queryAgent({
-      agentKey: "A",
-      identityPath: this.identityAPath,
+    const firstAgent = debateStep.order === "B" ? "B" : "A";
+    const secondAgent = firstAgent === "A" ? "B" : "A";
+
+    const agentFirstResult = await this.queryAgent({
+      agentKey: firstAgent,
+      identityPath: firstAgent === "A" ? this.identityAPath : this.identityBPath,
       topic: roundTopic,
       round: nextRound,
+      debateId: currentDebateId,
+      debateRound: nextDebateRound,
+      debateTotalRounds,
+      stageTitle: debateStep.title,
+      stageRule: debateStep.rule,
+      role: debateStep.roles[firstAgent],
+      task: debateStep.tasks[firstAgent],
+      speakerOrder: "first",
       allowIdentityUpdate,
+      isDebateStart,
+      isDebateEnd,
+      experience: this.readExperience(),
       conversation: conversationContext
     });
 
-    const topicAfterA = this.pickTopic(roundTopic, agentAResult.topic);
-    if (topicAfterA && topicAfterA !== roundTopic) {
-      this.log.appendTopicChange(roundTopic, topicAfterA, "A");
+    const topicAfterFirst = this.pickTopic(roundTopic, agentFirstResult.topic);
+    if (topicAfterFirst && topicAfterFirst !== roundTopic) {
+      this.log.appendTopicChange(roundTopic, topicAfterFirst, firstAgent);
     }
-    this.appendAgentReply("A", agentAResult.reply, nextRound, topicAfterA);
+    this.appendAgentReply(firstAgent, agentFirstResult.reply, nextRound, topicAfterFirst);
 
-    const conversationAfterA = readTail(this.conversationPath, this.config.contextMaxChars);
+    const conversationAfterFirst = readTail(this.conversationPath, this.config.contextMaxChars);
 
-    const agentBResult = await this.queryAgent({
-      agentKey: "B",
-      identityPath: this.identityBPath,
-      topic: topicAfterA,
+    const agentSecondResult = await this.queryAgent({
+      agentKey: secondAgent,
+      identityPath: secondAgent === "A" ? this.identityAPath : this.identityBPath,
+      topic: topicAfterFirst,
       round: nextRound,
+      debateId: currentDebateId,
+      debateRound: nextDebateRound,
+      debateTotalRounds,
+      stageTitle: debateStep.title,
+      stageRule: debateStep.rule,
+      role: debateStep.roles[secondAgent],
+      task: debateStep.tasks[secondAgent],
+      speakerOrder: "second",
       allowIdentityUpdate,
-      conversation: conversationAfterA
+      isDebateStart,
+      isDebateEnd,
+      experience: this.readExperience(),
+      conversation: conversationAfterFirst
     });
 
-    const topicAfterB = this.pickTopic(topicAfterA, agentBResult.topic);
-    if (topicAfterB && topicAfterB !== topicAfterA) {
-      this.log.appendTopicChange(topicAfterA, topicAfterB, "B");
+    const topicAfterSecond = this.pickTopic(topicAfterFirst, agentSecondResult.topic);
+    if (topicAfterSecond && topicAfterSecond !== topicAfterFirst) {
+      this.log.appendTopicChange(topicAfterFirst, topicAfterSecond, secondAgent);
     }
-    this.appendAgentReply("B", agentBResult.reply, nextRound, topicAfterB);
+    this.appendAgentReply(secondAgent, agentSecondResult.reply, nextRound, topicAfterSecond);
+
+    const resultsByAgent = {
+      [agentFirstResult.agentKey]: agentFirstResult,
+      [agentSecondResult.agentKey]: agentSecondResult
+    };
 
     if (allowIdentityUpdate) {
-      this.applyIdentityUpdate("A", agentAResult.identityUpdate);
-      this.applyIdentityUpdate("B", agentBResult.identityUpdate);
+      this.applyIdentityUpdate("A", resultsByAgent.A ? resultsByAgent.A.identityUpdate : []);
+      this.applyIdentityUpdate("B", resultsByAgent.B ? resultsByAgent.B.identityUpdate : []);
     }
 
     this.round = nextRound;
-    this.topic = topicAfterB || topicAfterA || roundTopic;
+    const resolvedTopic = topicAfterSecond || topicAfterFirst || roundTopic;
+    this.topic = resolvedTopic;
+    this.debateRound = isDebateEnd ? 0 : nextDebateRound;
 
     const lastTurn = {
       round: nextRound,
-      topic: this.topic,
-      agentA: agentAResult,
-      agentB: agentBResult
+      debate_round: nextDebateRound,
+      debate_id: currentDebateId,
+      stage: debateStep.title,
+      topic: resolvedTopic,
+      agentA: resultsByAgent.A,
+      agentB: resultsByAgent.B
     };
     fs.writeFileSync(this.lastTurnPath, JSON.stringify(lastTurn, null, 2), "utf8");
+
+    if (isDebateEnd) {
+      this.appendExperienceUpdate(currentDebateId, resolvedTopic, [
+        { agentKey: "A", updates: lastTurn.agentA.experienceUpdate },
+        { agentKey: "B", updates: lastTurn.agentB.experienceUpdate }
+      ]);
+      this.resetIdentityFiles();
+      this.topic = "";
+      this.log.appendSystemEvent("debate_end", `Debate ${currentDebateId} completed`);
+      this.debateId += 1;
+    }
 
     return { sleepSeconds: Math.max(1, this.config.loopSleepSeconds) };
   }
@@ -148,14 +380,43 @@ class DebateAgent {
     return trimmed;
   }
 
-  async queryAgent({ agentKey, identityPath, topic, round, allowIdentityUpdate, conversation }) {
+  async queryAgent({
+    agentKey,
+    identityPath,
+    topic,
+    round,
+    debateId,
+    debateRound,
+    debateTotalRounds,
+    stageTitle,
+    stageRule,
+    role,
+    task,
+    speakerOrder,
+    allowIdentityUpdate,
+    isDebateStart,
+    isDebateEnd,
+    experience,
+    conversation
+  }) {
     const identity = this.readIdentity(identityPath);
     const { systemPrompt, userPrompt } = buildDebatePrompts({
       agentKey,
       round,
+      debateId,
+      debateRound,
+      debateTotalRounds,
+      stageTitle,
+      stageRule,
+      role,
+      task,
+      speakerOrder,
       topic: topic || "",
       identity,
       allowIdentityUpdate,
+      experience,
+      isDebateStart,
+      isDebateEnd,
       conversation
     });
 
@@ -180,11 +441,14 @@ class DebateAgent {
     const parsed = this.parseAgentResponse(rawResponse);
     const reply = parsed.reply || (llmError ? `(API error: ${truncate(llmError, 120)})` : "(无回复)");
     const identityUpdate = allowIdentityUpdate ? parsed.identityUpdate : [];
+    const experienceUpdate = parsed.experienceUpdate || [];
 
     return {
+      agentKey,
       reply,
       topic: parsed.topic || topic || "",
       identityUpdate,
+      experienceUpdate,
       raw: rawResponse,
       error: llmError
     };
@@ -193,24 +457,50 @@ class DebateAgent {
   parseAgentResponse(raw) {
     const text = String(raw || "").trim();
     if (!text) {
-      return { reply: "", topic: "", identityUpdate: [] };
+      return { reply: "", topic: "", identityUpdate: [], experienceUpdate: [] };
     }
 
     const json = safeJsonExtract(text);
     if (!json || typeof json !== "object") {
-      return { reply: text, topic: "", identityUpdate: [] };
+      return { reply: text, topic: "", identityUpdate: [], experienceUpdate: [] };
     }
 
     const reply = String(json.reply || json.response || "").trim();
     const topic = String(json.topic || "").trim();
     const update = json.identity_update || json.identityUpdate || [];
-    const identityUpdate = this.normalizeList(update);
-    return { reply, topic, identityUpdate };
+    const identityUpdate = this.normalizeUpdateList(update);
+    const expUpdate = json.experience_update || json.experienceUpdate || [];
+    const experienceUpdate = this.normalizeList(expUpdate);
+    return { reply, topic, identityUpdate, experienceUpdate };
   }
 
   normalizeList(value) {
     if (Array.isArray(value)) {
-      return value.map((item) => String(item).trim()).filter(Boolean);
+      return value
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter(Boolean);
+    }
+    if (typeof value === "string" && value.trim()) {
+      return value
+        .split("\n")
+        .map((item) => item.replace(/^[-*]\s*/, "").trim())
+        .filter(Boolean);
+    }
+    return [];
+  }
+
+  normalizeUpdateList(value) {
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => {
+          if (typeof item === "string") return item.trim();
+          if (item && typeof item === "object") return item;
+          return null;
+        })
+        .filter(Boolean);
+    }
+    if (value && typeof value === "object") {
+      return [value];
     }
     if (typeof value === "string" && value.trim()) {
       return value
@@ -234,9 +524,53 @@ class DebateAgent {
     if (!updates || !updates.length) return;
     const identityPath = agentKey === "A" ? this.identityAPath : this.identityBPath;
     const timestamp = formatUtc8();
-    const lines = updates.map((item) => `- [${timestamp}] ${item}`);
-    fs.appendFileSync(identityPath, `${lines.join("\n")}\n`, "utf8");
-    this.log.appendIdentityUpdate(agentKey, updates, timestamp);
+    const ops = parseIdentityOps(updates);
+    if (!ops.length) return;
+
+    const raw = fs.existsSync(identityPath) ? fs.readFileSync(identityPath, "utf8") : "";
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    let changed = false;
+    let updatedLines = [...lines];
+    const applied = [];
+
+    for (const op of ops) {
+      if (op.op === "add" && op.text) {
+        updatedLines.push(formatIdentityLine(op.text, timestamp));
+        applied.push(`add: ${op.text}`);
+        changed = true;
+        continue;
+      }
+      if (op.op === "del" && op.text) {
+        const before = updatedLines.length;
+        updatedLines = updatedLines.filter((line) => !matchIdentityLine(stripIdentityPrefix(line), op.text));
+        if (updatedLines.length !== before) {
+          applied.push(`del: ${op.text}`);
+          changed = true;
+        }
+        continue;
+      }
+      if (op.op === "change" && op.from && op.to) {
+        const index = updatedLines.findIndex((line) => matchIdentityLine(stripIdentityPrefix(line), op.from));
+        if (index !== -1) {
+          updatedLines[index] = formatIdentityLine(op.to, timestamp);
+          applied.push(`change: ${op.from} -> ${op.to}`);
+          changed = true;
+        } else {
+          updatedLines.push(formatIdentityLine(op.to, timestamp));
+          applied.push(`change: ${op.from} -> ${op.to}`);
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      const payload = updatedLines.length ? `${updatedLines.join("\n")}\n` : "";
+      fs.writeFileSync(identityPath, payload, "utf8");
+      this.log.appendIdentityUpdate(agentKey, applied, timestamp);
+    }
   }
 
   appendConversation(line) {
@@ -257,6 +591,10 @@ class DebateAgent {
     const llmStatus = this.llm.getStatus();
     const status = {
       round: this.round,
+      debate_round: this.debateRound,
+      debate_id: this.debateId,
+      debate_stage: this.getDebateStageLabel(),
+      debate_total_rounds: this.debateFlow.length,
       topic: this.topic,
       last_reply_at: this.lastReplyAt || nowIso(),
       sleep_seconds: sleepSeconds,
@@ -307,6 +645,46 @@ class DebateAgent {
     } catch (err) {
       this.logger?.error("token.stats.save.failed", { error: err.message });
     }
+  }
+
+  getDebateStageLabel() {
+    if (!this.debateRound) return "-";
+    const step = this.debateFlow[this.debateRound - 1];
+    return step ? step.title : "-";
+  }
+
+  resetIdentityFiles() {
+    fs.writeFileSync(this.identityAPath, "", "utf8");
+    fs.writeFileSync(this.identityBPath, "", "utf8");
+  }
+
+  readExperience() {
+    const maxChars = this.config.experienceMaxChars || 3000;
+    if (!fs.existsSync(this.experiencePath)) return "";
+    const data = fs.readFileSync(this.experiencePath, "utf8");
+    if (data.length <= maxChars) return data;
+    return data.slice(-maxChars);
+  }
+
+  appendExperienceUpdate(debateId, topic, updatesByAgent) {
+    const timestamp = formatUtc8();
+    const lines = [
+      `## [${timestamp}] Debate ${debateId} | Topic: ${topic || "(待定)"}`
+    ];
+
+    let hasUpdates = false;
+    for (const item of updatesByAgent || []) {
+      if (!item || !Array.isArray(item.updates) || !item.updates.length) continue;
+      hasUpdates = true;
+      lines.push(`- ${item.agentKey}: ${item.updates.join("；")}`);
+    }
+
+    if (!hasUpdates) {
+      lines.push("- (无经验总结)");
+    }
+
+    fs.appendFileSync(this.experiencePath, `${lines.join("\n")}\n\n`, "utf8");
+    this.log.appendEvent("experience_update", { topic, updates: updatesByAgent });
   }
 }
 

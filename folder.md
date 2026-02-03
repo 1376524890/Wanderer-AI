@@ -10,6 +10,10 @@
   - 功能：启动辩论监控 CLI
   - 输入：`.env` 环境变量与 `state/` 输出文件
   - 输出：终端实时仪表盘
+- `run-web.js`
+  - 功能：启动 Web 监控面板服务
+  - 输入：`.env` 环境变量与 `state/` 输出文件
+  - 输出：HTTP + SSE 实时接口
 - `package.json`
   - 功能：声明 Node.js 依赖与 npm 脚本
   - 输入：无（供 npm 读取）
@@ -50,7 +54,23 @@
   - 功能：读取状态、对话与身份档案，渲染辩论监控 UI
   - 输入：`state/` 文件与 identity 文档
   - 输出：实时监控界面
+- `src/webServer.js`
+  - 功能：提供 Web UI 的静态资源与实时 API
+  - 输入：`state/` 文件与 `.env`
+  - 输出：HTTP 服务与 SSE 推送
 - `src/utils.js`
   - 功能：通用解析与文件工具
   - 输入：字符串/路径
   - 输出：解析后的值或截断文本
+- `web/index.html`
+  - 功能：Web 控制台入口页面
+  - 输入：浏览器访问
+  - 输出：Vue 前端 UI
+- `web/app.js`
+  - 功能：Web 控制台前端逻辑（实时流/分页/滚动）
+  - 输入：SSE 与 REST API
+  - 输出：动态渲染页面
+- `web/style.css`
+  - 功能：Web 控制台视觉样式
+  - 输入：页面结构
+  - 输出：高级视觉风格

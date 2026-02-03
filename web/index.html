@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wanderer AI Debate · Control Room</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div class="app-shell">
+        <header class="topbar">
+          <div class="brand">
+            <span class="logo-dot"></span>
+            <div>
+              <div class="title">Wanderer AI Debate</div>
+              <div class="subtitle">实时辩论监控 · Web Control Room</div>
+            </div>
+          </div>
+          <div class="connection">
+            <span class="pill" :class="connection.state">{{ connectionLabel }}</span>
+            <span class="time">{{ statusTime }}</span>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="panel conversation">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">对话流</div>
+                <div class="panel-sub">实时捕捉最新辩论内容，支持自动翻页与搜索</div>
+              </div>
+              <div class="panel-actions">
+                <input class="input" v-model="filterText" placeholder="搜索关键词" />
+                <label class="toggle">
+                  <input type="checkbox" v-model="autoScroll" />
+                  自动滚动
+                </label>
+                <label class="toggle">
+                  <input type="checkbox" v-model="autoPage" />
+                  自动翻页
+                </label>
+                <button class="btn" @click="scrollToBottom">跳到底部</button>
+              </div>
+            </div>
+
+            <div class="conversation-list" ref="listRef" @scroll="onScroll">
+              <div class="load-more" v-if="hasMore">
+                <button class="btn ghost" :disabled="loadingEarlier" @click="loadEarlier">
+                  {{ loadingEarlier ? "加载中..." : "加载更早消息" }}
+                </button>
+              </div>
+              <div class="empty" v-if="!filteredEntries.length">暂无对话</div>
+              <div
+                class="entry"
+                v-for="entry in filteredEntries"
+                :key="entry.id"
+                :class="entry.type"
+              >
+                <template v-if="entry.type === 'round'">
+                  <div class="round-chip">Round {{ entry.round || '-' }}</div>
+                  <div class="round-title">{{ entry.title }}</div>
+                </template>
+                <template v-else>
+                  <div class="entry-header">
+                    <span class="agent" :class="entry.agent === 'A' ? 'agent-a' : 'agent-b'">
+                      Agent {{ entry.agent || '-' }}
+                    </span>
+                    <span class="meta">Round {{ entry.round || '-' }}</span>
+                    <span class="meta">{{ entry.timestamp || '-' }}</span>
+                    <span class="topic" v-if="entry.topic">主题：{{ entry.topic }}</span>
+                  </div>
+                  <pre class="entry-body">{{ entry.body || "(空)" }}</pre>
+                </template>
+              </div>
+            </div>
+          </section>
+
+          <aside class="panel status">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">系统状态</div>
+                <div class="panel-sub">运行参数、API 健康与 token 消耗</div>
+              </div>
+              <div class="panel-actions">
+                <button class="btn ghost" @click="refreshOnce">手动刷新</button>
+              </div>
+            </div>
+
+            <div class="status-grid">
+              <div class="card">
+                <div class="label">主题</div>
+                <div class="value">{{ status.topic || '-' }}</div>
+              </div>
+              <div class="card">
+                <div class="label">轮次</div>
+                <div class="value">{{ status.round ?? '-' }}</div>
+              </div>
+              <div class="card">
+                <div class="label">上次回复</div>
+                <div class="value">{{ status.last_reply_at || '-' }}</div>
+              </div>
+              <div class="card">
+                <div class="label">休眠间隔</div>
+                <div class="value">{{ status.sleep_seconds ? status.sleep_seconds + 's' : '-' }}</div>
+              </div>
+              <div class="card">
+                <div class="label">API 状态</div>
+                <div class="value" :class="status.api_status?.ok ? 'ok' : 'fail'">
+                  {{ status.api_status?.ok ? 'OK' : 'FAIL' }}
+                </div>
+              </div>
+              <div class="card">
+                <div class="label">延迟</div>
+                <div class="value">
+                  {{ status.api_status?.last_latency_ms ? status.api_status.last_latency_ms + 'ms' : '-' }}
+                </div>
+              </div>
+              <div class="card">
+                <div class="label">Token 总量</div>
+                <div class="value">
+                  {{ status.token_stats?.total_tokens ? formatNumber(status.token_stats.total_tokens) : '-' }}
+                </div>
+              </div>
+              <div class="card">
+                <div class="label">请求次数</div>
+                <div class="value">{{ status.token_stats?.requests ?? '-' }}</div>
+              </div>
+              <div class="card wide" v-if="lastError">
+                <div class="label">最近错误</div>
+                <div class="value error">{{ lastError }}</div>
+              </div>
+            </div>
+
+            <div class="identity-grid">
+              <div class="card identity">
+                <div class="label">Agent A Identity</div>
+                <pre>{{ identities.identityA || "(空)" }}</pre>
+              </div>
+              <div class="card identity">
+                <div class="label">Agent B Identity</div>
+                <pre>{{ identities.identityB || "(空)" }}</pre>
+              </div>
+            </div>
+          </aside>
+        </main>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
