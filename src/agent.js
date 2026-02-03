@@ -11,110 +11,11 @@ const path = require("path");
 const { DebateLog } = require("./journal");
 const { LlmClient } = require("./llmClient");
 const { buildDebatePrompts } = require("./prompts");
+const { buildDebateFlow, formatStageLengthGuide, getStageLengthGuide } = require("./workflow");
 const { ensureDir, nowIso, readTail, truncate, safeJsonExtract, formatUtc8 } = require("./utils");
 
 function sleep(seconds) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(1, seconds) * 1000));
-}
-
-function buildDebateFlow(freeRounds) {
-  const safeFreeRounds = Math.max(1, Number.isFinite(freeRounds) ? freeRounds : 4);
-  const flow = [
-    {
-      key: "opening",
-      title: "陈词阶段-立论陈词",
-      rule: "正方一辩陈词3分钟，反方一辩陈词3分钟。",
-      order: "A",
-      roles: { A: "正方一辩", B: "反方一辩" },
-      tasks: {
-        A: "进行立论陈词，给出立场、定义、核心论点与证据。",
-        B: "进行立论陈词，明确反方立场并指出正方核心漏洞。"
-      }
-    },
-    {
-      key: "cross_1",
-      title: "攻辩阶段-正方二辩提问",
-      rule: "正方二辩提问，反方二辩或三辩回答；提问30秒，回答1分钟。",
-      order: "A",
-      roles: { A: "正方二辩(提问)", B: "反方二辩/三辩(回答)" },
-      tasks: {
-        A: "提出1个尖锐问题，聚焦对方逻辑漏洞。",
-        B: "直接回答问题，给出清晰理由或证据。"
-      }
-    },
-    {
-      key: "cross_2",
-      title: "攻辩阶段-反方二辩提问",
-      rule: "反方二辩提问，正方二辩或三辩回答；提问30秒，回答1分钟。",
-      order: "B",
-      roles: { A: "正方二辩/三辩(回答)", B: "反方二辩(提问)" },
-      tasks: {
-        A: "直接回答问题，给出清晰理由或证据。",
-        B: "提出1个尖锐问题，聚焦对方逻辑漏洞。"
-      }
-    },
-    {
-      key: "cross_3",
-      title: "攻辩阶段-正方三辩提问",
-      rule: "正方三辩提问，反方二辩或三辩回答；提问30秒，回答1分钟。",
-      order: "A",
-      roles: { A: "正方三辩(提问)", B: "反方二辩/三辩(回答)" },
-      tasks: {
-        A: "提出1个尖锐问题，逼迫对方澄清或承认不足。",
-        B: "直接回答问题，避免回避或跑题。"
-      }
-    },
-    {
-      key: "cross_4",
-      title: "攻辩阶段-反方三辩提问",
-      rule: "反方三辩提问，正方二辩或三辩回答；提问30秒，回答1分钟。",
-      order: "B",
-      roles: { A: "正方二辩/三辩(回答)", B: "反方三辩(提问)" },
-      tasks: {
-        A: "直接回答问题，补强立场并避免新漏洞。",
-        B: "提出1个尖锐问题，推动对方自证。"
-      }
-    },
-    {
-      key: "cross_summary",
-      title: "攻辩阶段-攻辩小结",
-      rule: "四轮攻辩完毕后，正方一辩与反方一辩各作2分钟攻辩小结。",
-      order: "A",
-      roles: { A: "正方一辩(攻辩小结)", B: "反方一辩(攻辩小结)" },
-      tasks: {
-        A: "针对攻辩态势总结己方优势与对方漏洞，不背稿。",
-        B: "针对攻辩态势总结己方优势与对方漏洞，不背稿。"
-      }
-    }
-  ];
-
-  for (let i = 0; i < safeFreeRounds; i += 1) {
-    flow.push({
-      key: `free_${i + 1}`,
-      title: `自由辩论阶段-第${i + 1}轮`,
-      rule: "自由辩论由正方先发言，正反方轮流发言，共8分钟，每方4分钟。",
-      order: "A",
-      roles: { A: "正方自由辩", B: "反方自由辩" },
-      tasks: {
-        A: "回应对方最新观点并推进己方核心论点。",
-        B: "回应对方最新观点并推进己方核心论点。"
-      }
-    });
-  }
-
-  flow.push({
-    key: "closing",
-    title: "总结陈词阶段",
-    rule: "反方四辩总结陈词3分钟；正方四辩总结陈词3分钟。",
-    order: "B",
-    roles: { A: "正方四辩(总结陈词)", B: "反方四辩(总结陈词)" },
-    tasks: {
-      A: "最终总结，回扣核心论点与全场关键对抗点。",
-      B: "最终总结，回扣核心论点与全场关键对抗点。"
-    }
-  });
-
-  return flow;
 }
 
 function normalizeOp(op) {
@@ -185,6 +86,20 @@ function formatIdentityLine(text, timestamp) {
 function matchIdentityLine(lineText, query) {
   if (!lineText || !query) return false;
   return lineText.toLowerCase().includes(query.toLowerCase());
+}
+
+function buildConversationEntry(agentKey, reply, round, topic) {
+  const timestamp = formatUtc8();
+  const header = `[${timestamp}] ${agentKey} (Round ${round})`;
+  const body = reply ? reply.trim() : "(空)";
+  return `${header}\nTopic: ${topic || "(待定)"}\n${body}\n\n`;
+}
+
+function appendAndTrimConversation(base, addition, maxChars) {
+  const prefix = base && !base.endsWith("\n") ? "\n" : "";
+  const combined = `${base || ""}${prefix}${addition || ""}`;
+  if (!maxChars || combined.length <= maxChars) return combined;
+  return combined.slice(-maxChars);
 }
 
 class DebateAgent {
@@ -272,9 +187,6 @@ class DebateAgent {
     const allowIdentityUpdate = true;
     const roundTopic = this.topic || "";
 
-    this.log.appendRoundStart(nextRound, roundTopic);
-    this.appendConversation(`\n=== Round ${nextRound} | Topic: ${roundTopic || "(待确定)"} ===\n`);
-
     const conversationContext = readTail(this.conversationPath, this.config.contextMaxChars);
 
     const firstAgent = debateStep.order === "B" ? "B" : "A";
@@ -288,8 +200,10 @@ class DebateAgent {
       debateId: currentDebateId,
       debateRound: nextDebateRound,
       debateTotalRounds,
+      stageKey: debateStep.key,
       stageTitle: debateStep.title,
       stageRule: debateStep.rule,
+      lengthGuide: getStageLengthGuide(debateStep, firstAgent),
       role: debateStep.roles[firstAgent],
       task: debateStep.tasks[firstAgent],
       speakerOrder: "first",
@@ -300,13 +214,19 @@ class DebateAgent {
       conversation: conversationContext
     });
 
-    const topicAfterFirst = this.pickTopic(roundTopic, agentFirstResult.topic);
-    if (topicAfterFirst && topicAfterFirst !== roundTopic) {
-      this.log.appendTopicChange(roundTopic, topicAfterFirst, firstAgent);
+    if (agentFirstResult.error) {
+      const error = `Agent ${firstAgent} failed: ${truncate(agentFirstResult.error, 120)}`;
+      this.log.appendSystemEvent("round_retry", error);
+      throw new Error(error);
     }
-    this.appendAgentReply(firstAgent, agentFirstResult.reply, nextRound, topicAfterFirst);
 
-    const conversationAfterFirst = readTail(this.conversationPath, this.config.contextMaxChars);
+    const topicAfterFirst = this.pickTopic(roundTopic, agentFirstResult.topic);
+    const virtualFirstEntry = buildConversationEntry(firstAgent, agentFirstResult.reply, nextRound, topicAfterFirst);
+    const conversationAfterFirst = appendAndTrimConversation(
+      conversationContext,
+      virtualFirstEntry,
+      this.config.contextMaxChars
+    );
 
     const agentSecondResult = await this.queryAgent({
       agentKey: secondAgent,
@@ -316,8 +236,10 @@ class DebateAgent {
       debateId: currentDebateId,
       debateRound: nextDebateRound,
       debateTotalRounds,
+      stageKey: debateStep.key,
       stageTitle: debateStep.title,
       stageRule: debateStep.rule,
+      lengthGuide: getStageLengthGuide(debateStep, secondAgent),
       role: debateStep.roles[secondAgent],
       task: debateStep.tasks[secondAgent],
       speakerOrder: "second",
@@ -328,7 +250,19 @@ class DebateAgent {
       conversation: conversationAfterFirst
     });
 
+    if (agentSecondResult.error) {
+      const error = `Agent ${secondAgent} failed: ${truncate(agentSecondResult.error, 120)}`;
+      this.log.appendSystemEvent("round_retry", error);
+      throw new Error(error);
+    }
+
     const topicAfterSecond = this.pickTopic(topicAfterFirst, agentSecondResult.topic);
+    this.log.appendRoundStart(nextRound, roundTopic);
+    this.appendConversation(`\n=== Round ${nextRound} | Topic: ${roundTopic || "(待确定)"} ===\n`);
+    if (topicAfterFirst && topicAfterFirst !== roundTopic) {
+      this.log.appendTopicChange(roundTopic, topicAfterFirst, firstAgent);
+    }
+    this.appendAgentReply(firstAgent, agentFirstResult.reply, nextRound, topicAfterFirst);
     if (topicAfterSecond && topicAfterSecond !== topicAfterFirst) {
       this.log.appendTopicChange(topicAfterFirst, topicAfterSecond, secondAgent);
     }
@@ -388,8 +322,10 @@ class DebateAgent {
     debateId,
     debateRound,
     debateTotalRounds,
+    stageKey,
     stageTitle,
     stageRule,
+    lengthGuide,
     role,
     task,
     speakerOrder,
@@ -406,8 +342,10 @@ class DebateAgent {
       debateId,
       debateRound,
       debateTotalRounds,
+      stageKey,
       stageTitle,
       stageRule,
+      lengthGuide,
       role,
       task,
       speakerOrder,
@@ -423,9 +361,10 @@ class DebateAgent {
     let rawResponse = "";
     let llmUsage = null;
     let llmError = "";
+    const model = this.getModelForAgent(agentKey);
 
     try {
-      const result = await this.llm.chat(systemPrompt, userPrompt);
+      const result = await this.llm.chat(systemPrompt, userPrompt, { model });
       rawResponse = result.content || "";
       llmUsage = result.usage || null;
     } catch (err) {
@@ -589,11 +528,15 @@ class DebateAgent {
 
   writeStatus(lastError, sleepSeconds) {
     const llmStatus = this.llm.getStatus();
+    const stageMeta = this.getDebateStageMeta();
     const status = {
       round: this.round,
       debate_round: this.debateRound,
       debate_id: this.debateId,
-      debate_stage: this.getDebateStageLabel(),
+      debate_stage: stageMeta.title,
+      debate_stage_key: stageMeta.key,
+      debate_stage_rule: stageMeta.rule,
+      debate_stage_length: stageMeta.lengthGuide,
       debate_total_rounds: this.debateFlow.length,
       topic: this.topic,
       last_reply_at: this.lastReplyAt || nowIso(),
@@ -647,10 +590,27 @@ class DebateAgent {
     }
   }
 
-  getDebateStageLabel() {
-    if (!this.debateRound) return "-";
+  getDebateStageMeta() {
+    if (!this.debateRound) {
+      return { key: "-", title: "-", rule: "-", lengthGuide: "-" };
+    }
     const step = this.debateFlow[this.debateRound - 1];
-    return step ? step.title : "-";
+    if (!step) {
+      return { key: "-", title: "-", rule: "-", lengthGuide: "-" };
+    }
+    return {
+      key: step.key || "-",
+      title: step.title || "-",
+      rule: step.rule || "-",
+      lengthGuide: formatStageLengthGuide(step)
+    };
+  }
+
+  getModelForAgent(agentKey) {
+    const fallback = this.config.vllmModel;
+    if (agentKey === "A") return this.config.vllmModelA || fallback;
+    if (agentKey === "B") return this.config.vllmModelB || fallback;
+    return fallback;
   }
 
   resetIdentityFiles() {

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# 用途：一键创建环境、安装依赖并启动辩论引擎。
+# 用途：一键创建环境、安装依赖并后台启动辩论引擎 + Web UI。
 # 不负责：替代 systemd 或进程守护。
 # 输入：当前目录与可选 .env 配置。
-# 输出：依赖安装日志与代理进程。
-# 关联：package.json, run-agent.js。
+# 输出：依赖安装日志与后台进程 PID。
+# 关联：package.json, run-agent.js, run-web.js。
 
 set -euo pipefail
 
@@ -27,5 +27,22 @@ fi
 echo "安装 Node.js 依赖..."
 npm install
 
-echo "启动辩论引擎 + 监控面板（npm run start:all）..."
-npm run start:all
+STATE_DIR=$(grep -m1 "^STATE_DIR=" .env 2>/dev/null | cut -d= -f2- || true)
+LOG_DIR=$(grep -m1 "^LOG_DIR=" .env 2>/dev/null | cut -d= -f2- || true)
+STATE_DIR="${STATE_DIR:-state}"
+LOG_DIR="${LOG_DIR:-logs}"
+
+mkdir -p "$STATE_DIR" "$LOG_DIR"
+
+echo "后台启动辩论引擎与 Web UI..."
+nohup node run-agent.js >"$LOG_DIR/agent.out" 2>&1 &
+AGENT_PID=$!
+nohup node run-web.js >"$LOG_DIR/web.out" 2>&1 &
+WEB_PID=$!
+
+echo "$AGENT_PID" >"$STATE_DIR/agent.pid"
+echo "$WEB_PID" >"$STATE_DIR/web.pid"
+
+echo "✅ 已后台启动"
+echo "   - Agent PID: $AGENT_PID (log: $LOG_DIR/agent.out)"
+echo "   - Web   PID: $WEB_PID (log: $LOG_DIR/web.out)"

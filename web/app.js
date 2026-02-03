@@ -32,6 +32,16 @@ createApp({
       return "连接中";
     });
 
+    const apiStatusLabel = computed(() => {
+      if (status.value.api_status?.retrying) return "RETRY";
+      return status.value.api_status?.ok ? "OK" : "FAIL";
+    });
+
+    const apiStatusClass = computed(() => {
+      if (status.value.api_status?.retrying) return "retry";
+      return status.value.api_status?.ok ? "ok" : "fail";
+    });
+
     const lastError = computed(() => {
       return (
         status.value.last_error ||
@@ -173,6 +183,13 @@ createApp({
       eventSource.addEventListener("entries", (evt) => {
         try {
           const data = JSON.parse(evt.data || "{}");
+          if (data.reset) {
+            entries.value = Array.isArray(data.entries) ? data.entries : [];
+            hasMore.value = Boolean(data.hasMore);
+            lastEntryId = data.lastEntryId || entries.value.length;
+            nextTick(scrollToBottom);
+            return;
+          }
           if (Array.isArray(data.entries) && data.entries.length) {
             applyEntries(data.entries, true);
             lastEntryId = data.lastEntryId || lastEntryId;
@@ -224,6 +241,8 @@ createApp({
       listRef,
       statusTime,
       connectionLabel,
+      apiStatusLabel,
+      apiStatusClass,
       lastError,
       filteredEntries,
       scrollToBottom,

@@ -19,7 +19,11 @@ class LlmClient {
       last_status: null,
       last_latency_ms: null,
       last_success_at: null,
-      last_failure_at: null
+      last_failure_at: null,
+      retrying: false,
+      last_retry_at: null,
+      last_retry_attempt: 0,
+      last_retry_error: ""
     };
   }
 
@@ -71,10 +75,15 @@ class LlmClient {
     return { ...this.status };
   }
 
-  async chat(systemPrompt, userPrompt) {
+  async chat(systemPrompt, userPrompt, options = {}) {
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const promptChars = (systemPrompt?.length || 0) + (userPrompt?.length || 0);
-    const model = this.config.vllmModel;
+    const model = options.model || this.config.vllmModel;
+
+    this.status.retrying = false;
+    this.status.last_retry_at = null;
+    this.status.last_retry_attempt = 0;
+    this.status.last_retry_error = "";
 
     this.logger?.info("llm.request.start", {
       requestId,
@@ -85,7 +94,7 @@ class LlmClient {
 
     try {
       const startAt = Date.now();
-      const response = await this.chatWithRetry(systemPrompt, userPrompt, requestId);
+      const response = await this.chatWithRetry(systemPrompt, userPrompt, requestId, model);
       const ms = Date.now() - startAt;
 
       this.status.ok = true;
@@ -93,6 +102,7 @@ class LlmClient {
       this.status.last_status = 200;
       this.status.last_latency_ms = ms;
       this.status.last_success_at = nowIso();
+      this.status.retrying = false;
 
       this.logger?.info("llm.request.success", {
         requestId,
@@ -112,6 +122,7 @@ class LlmClient {
       this.status.last_error = errorMsg;
       this.status.last_status = status;
       this.status.last_failure_at = nowIso();
+      this.status.retrying = false;
 
       this.logger?.error("llm.request.failed", {
         requestId,
@@ -122,14 +133,14 @@ class LlmClient {
     }
   }
 
-  async chatWithRetry(systemPrompt, userPrompt, requestId) {
+  async chatWithRetry(systemPrompt, userPrompt, requestId, model) {
     let attempt = 0;
     const maxAttempts = this.config.maxRetries;
 
     while (true) {
       try {
         const payload = {
-          model: this.config.vllmModel,
+          model: model || this.config.vllmModel,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt }
@@ -158,6 +169,7 @@ class LlmClient {
         const isRetryable = this.isRetryableError(err);
 
         if (!isRetryable || attempt > maxAttempts) {
+          this.status.retrying = false;
           this.logger?.error("llm.request.failed", {
             requestId,
             attempt,
@@ -172,6 +184,11 @@ class LlmClient {
           this.config.retryBaseSeconds * Math.pow(this.config.retryBackoffMultiplier, attempt - 1)
             + Math.random() * this.config.retryJitterSeconds
         );
+
+        this.status.retrying = true;
+        this.status.last_retry_at = nowIso();
+        this.status.last_retry_attempt = attempt;
+        this.status.last_retry_error = err.message || String(err);
 
         this.logger?.warn("llm.request.retry", {
           requestId,

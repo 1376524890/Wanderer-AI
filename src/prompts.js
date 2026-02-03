@@ -18,14 +18,18 @@ const AGENTS = {
   }
 };
 
+const { formatLengthGuide } = require("./workflow");
+
 function buildDebatePrompts({
   agentKey,
   round,
   debateId,
   debateRound,
   debateTotalRounds,
+  stageKey,
   stageTitle,
   stageRule,
+  lengthGuide,
   role,
   task,
   speakerOrder,
@@ -45,6 +49,7 @@ function buildDebatePrompts({
   const orderText = speakerOrder === "first" ? "先手" : "后手";
   const debateStartText = isDebateStart ? "是" : "否";
   const debateEndText = isDebateEnd ? "是" : "否";
+  const lengthGuideText = lengthGuide ? formatLengthGuide(lengthGuide) : "按阶段规则控制";
 
   const systemPrompt = [
     "你是模拟人类辩论赛的智能体，只输出严格 JSON。",
@@ -63,8 +68,10 @@ function buildDebatePrompts({
     `当前全局回合：${round}`,
     `当前辩论场次：${debateId ?? "-"}`,
     `辩论轮次：${debateRound ?? "-"} / ${debateTotalRounds ?? "-"}`,
+    `阶段标识：${stageKey || "-"}`,
     `阶段：${stageTitle || "-"}`,
     `阶段规则：${stageRule || "-"}`,
+    `字数建议：${lengthGuideText}`,
     `你的角色：${role || "-"}`,
     `发言顺序：${orderText}`,
     `本轮任务：${task || "-"}`,
@@ -73,8 +80,8 @@ function buildDebatePrompts({
     `当前主题：${topicText}`,
     `是否允许更新身份档案：${allowUpdateText}`,
     "",
-    "【辩论时长模拟】",
-    "3分钟≈2-3段；2分钟≈1-2段；1分钟≈1段；30秒≈1-2句。",
+    "【字数控制】",
+    "必须遵循字数建议范围，超出需在下一轮自行压缩。",
     "",
     "【共享 experience 文档】",
     experienceText,

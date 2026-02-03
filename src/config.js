@@ -42,6 +42,8 @@ function loadConfig() {
   return {
     vllmBaseUrl: process.env.VLLM_BASE_URL || "https://open.bigmodel.cn/api/paas/v4",
     vllmModel: process.env.VLLM_MODEL || "glm-4.7-flash",
+    vllmModelA: process.env.VLLM_MODEL_A || "",
+    vllmModelB: process.env.VLLM_MODEL_B || "",
     vllmApiKey: process.env.VLLM_API_KEY || "",
     nvidiaApiKey: process.env.NVIDIA_API_KEY || "",
     openaiExtraBody,

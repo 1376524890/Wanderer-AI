@@ -123,6 +123,13 @@ body {
   min-height: 0;
 }
 
+.status-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+
 .panel-header {
   padding: 16px 20px;
   border-bottom: 1px solid var(--border);
@@ -309,6 +316,10 @@ body {
 
 .value.ok {
   color: var(--success);
+}
+
+.value.retry {
+  color: var(--accent);
 }
 
 .value.fail,

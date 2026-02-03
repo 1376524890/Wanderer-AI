@@ -87,59 +87,77 @@
               </div>
             </div>
 
-            <div class="status-grid">
-              <div class="card">
-                <div class="label">主题</div>
-                <div class="value">{{ status.topic || '-' }}</div>
-              </div>
-              <div class="card">
-                <div class="label">轮次</div>
-                <div class="value">{{ status.round ?? '-' }}</div>
-              </div>
-              <div class="card">
-                <div class="label">上次回复</div>
-                <div class="value">{{ status.last_reply_at || '-' }}</div>
-              </div>
-              <div class="card">
-                <div class="label">休眠间隔</div>
-                <div class="value">{{ status.sleep_seconds ? status.sleep_seconds + 's' : '-' }}</div>
-              </div>
-              <div class="card">
-                <div class="label">API 状态</div>
-                <div class="value" :class="status.api_status?.ok ? 'ok' : 'fail'">
-                  {{ status.api_status?.ok ? 'OK' : 'FAIL' }}
+            <div class="status-scroll">
+              <div class="status-grid">
+                <div class="card">
+                  <div class="label">主题</div>
+                  <div class="value">{{ status.topic || '-' }}</div>
+                </div>
+                <div class="card">
+                  <div class="label">当前阶段</div>
+                  <div class="value">{{ status.debate_stage || '-' }}</div>
+                </div>
+                <div class="card">
+                  <div class="label">轮次</div>
+                  <div class="value">{{ status.round ?? '-' }}</div>
+                </div>
+                <div class="card">
+                  <div class="label">辩论轮次</div>
+                  <div class="value">{{ status.debate_round ?? '-' }} / {{ status.debate_total_rounds ?? '-' }}</div>
+                </div>
+                <div class="card">
+                  <div class="label">上次回复</div>
+                  <div class="value">{{ status.last_reply_at || '-' }}</div>
+                </div>
+                <div class="card">
+                  <div class="label">休眠间隔</div>
+                  <div class="value">{{ status.sleep_seconds ? status.sleep_seconds + 's' : '-' }}</div>
+                </div>
+                <div class="card">
+                  <div class="label">API 状态</div>
+                  <div class="value" :class="apiStatusClass">
+                    {{ apiStatusLabel }}
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="label">延迟</div>
+                  <div class="value">
+                    {{ status.api_status?.last_latency_ms ? status.api_status.last_latency_ms + 'ms' : '-' }}
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="label">Token 总量</div>
+                  <div class="value">
+                    {{ status.token_stats?.total_tokens ? formatNumber(status.token_stats.total_tokens) : '-' }}
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="label">请求次数</div>
+                  <div class="value">{{ status.token_stats?.requests ?? '-' }}</div>
+                </div>
+                <div class="card wide">
+                  <div class="label">阶段规则</div>
+                  <div class="value">{{ status.debate_stage_rule || '-' }}</div>
+                </div>
+                <div class="card wide">
+                  <div class="label">字数指导</div>
+                  <div class="value">{{ status.debate_stage_length || '-' }}</div>
+                </div>
+                <div class="card wide" v-if="lastError">
+                  <div class="label">最近错误</div>
+                  <div class="value error">{{ lastError }}</div>
                 </div>
               </div>
-              <div class="card">
-                <div class="label">延迟</div>
-                <div class="value">
-                  {{ status.api_status?.last_latency_ms ? status.api_status.last_latency_ms + 'ms' : '-' }}
-                </div>
-              </div>
-              <div class="card">
-                <div class="label">Token 总量</div>
-                <div class="value">
-                  {{ status.token_stats?.total_tokens ? formatNumber(status.token_stats.total_tokens) : '-' }}
-                </div>
-              </div>
-              <div class="card">
-                <div class="label">请求次数</div>
-                <div class="value">{{ status.token_stats?.requests ?? '-' }}</div>
-              </div>
-              <div class="card wide" v-if="lastError">
-                <div class="label">最近错误</div>
-                <div class="value error">{{ lastError }}</div>
-              </div>
-            </div>
 
-            <div class="identity-grid">
-              <div class="card identity">
-                <div class="label">Agent A Identity</div>
-                <pre>{{ identities.identityA || "(空)" }}</pre>
-              </div>
-              <div class="card identity">
-                <div class="label">Agent B Identity</div>
-                <pre>{{ identities.identityB || "(空)" }}</pre>
+              <div class="identity-grid">
+                <div class="card identity">
+                  <div class="label">Agent A Identity</div>
+                  <pre>{{ identities.identityA || "(空)" }}</pre>
+                </div>
+                <div class="card identity">
+                  <div class="label">Agent B Identity</div>
+                  <pre>{{ identities.identityB || "(空)" }}</pre>
+                </div>
               </div>
             </div>
           </aside>

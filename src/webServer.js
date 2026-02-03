@@ -320,9 +320,15 @@ function broadcastUpdates() {
     }
 
     if (entries.length < client.lastEntryId) {
-      client.lastEntryId = 0;
-    }
-    if (entries.length > client.lastEntryId) {
+      const snapshot = getConversationSlice(null, 80);
+      sendEvent(res, "entries", {
+        entries: snapshot.entries,
+        lastEntryId: snapshot.lastId,
+        hasMore: snapshot.hasMore,
+        reset: true
+      });
+      client.lastEntryId = snapshot.lastId;
+    } else if (entries.length > client.lastEntryId) {
       const newEntries = entries.slice(client.lastEntryId);
       sendEvent(res, "entries", {
         entries: newEntries,

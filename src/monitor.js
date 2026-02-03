@@ -134,7 +134,8 @@ class Monitor {
   renderHeader(status) {
     const nowText = formatUtc8();
     const topic = status.topic ? truncate(status.topic, 60) : "-";
-    return ` 时间: ${nowText} | 主题: ${topic}`;
+    const stage = status.debate_stage ? truncate(status.debate_stage, 40) : "-";
+    return ` 时间: ${nowText} | 主题: ${topic} | 阶段: ${stage}`;
   }
 
   renderFooter(status) {
@@ -142,7 +143,7 @@ class Monitor {
     const lastReply = status.last_reply_at ? this.formatUtc8FromIso(status.last_reply_at) : "-";
 
     const api = status.api_status || {};
-    const apiState = api.ok ? "OK" : "FAIL";
+    const apiState = api.retrying ? "RETRY" : api.ok ? "OK" : "FAIL";
     const latency = api.last_latency_ms ? `${api.last_latency_ms}ms` : "-";
     const apiError = api.last_error ? truncate(api.last_error, 80) : "";
 
