@@ -60,6 +60,18 @@ function safeJsonExtract(raw) {
   }
 }
 
+function formatUtc8(date = new Date()) {
+  const utc8 = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+  const pad = (value) => String(value).padStart(2, "0");
+  const yyyy = utc8.getUTCFullYear();
+  const mm = pad(utc8.getUTCMonth() + 1);
+  const dd = pad(utc8.getUTCDate());
+  const hh = pad(utc8.getUTCHours());
+  const mi = pad(utc8.getUTCMinutes());
+  const ss = pad(utc8.getUTCSeconds());
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss} UTC+8`;
+}
+
 module.exports = {
   parseBool,
   parseIntValue,
@@ -68,5 +80,6 @@ module.exports = {
   nowIso,
   truncate,
   readTail,
-  safeJsonExtract
+  safeJsonExtract,
+  formatUtc8
 };

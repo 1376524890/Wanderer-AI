@@ -1,690 +1,580 @@
-/* 用途：运行自主探索主循环、执行脚本/命令并管理状态输出。
+/* 用途：运行双代理辩论主循环，维护身份档案与状态输出。
 不负责：渲染监控界面。
-输入：配置、日志历史与模型响应。
-输出：更新日志条目、状态文件、脚本与命令执行结果。
-关联：src/llmClient.js, src/journal.js, src/logger.js。
+输入：配置、对话历史、身份档案。
+输出：对话日志、身份更新、状态文件。
+关联：src/llmClient.js, src/journal.js, src/prompts.js。
 */
 
 const fs = require("fs");
 const path = require("path");
-const { spawn } = require("child_process");
 
-const { Journal } = require("./journal");
+const { DebateLog } = require("./journal");
 const { LlmClient } = require("./llmClient");
-const { SYSTEM_PROMPT, USER_PROMPT_TEMPLATE } = require("./prompts");
-const { ensureDir, nowIso, readTail, truncate } = require("./utils");
+const { buildDebatePrompts } = require("./prompts");
+const { buildDebateFlow, formatStageLengthGuide, getStageLengthGuide } = require("./workflow");
+const { ensureDir, nowIso, readTail, truncate, safeJsonExtract, formatUtc8 } = require("./utils");
 
 function sleep(seconds) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(1, seconds) * 1000));
 }
 
-class Agent {
+function normalizeOp(op) {
+  const raw = String(op || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (["add", "新增", "添加", "补充"].includes(raw)) return "add";
+  if (["del", "delete", "remove", "删除", "移除"].includes(raw)) return "del";
+  if (["change", "update", "replace", "修改", "变更", "替换"].includes(raw)) return "change";
+  return raw;
+}
+
+function parseIdentityOps(updates) {
+  if (!Array.isArray(updates)) return [];
+  const ops = [];
+
+  for (const item of updates) {
+    if (typeof item === "string") {
+      const text = item.trim();
+      if (!text) continue;
+      const addMatch = text.match(/^(add|新增|添加|补充)\s*[:：]\s*(.+)$/i);
+      const delMatch = text.match(/^(del|delete|remove|删除|移除)\s*[:：]\s*(.+)$/i);
+      const changeMatch = text.match(/^(change|update|replace|修改|变更|替换)\s*[:：]\s*(.+?)(?:\s*->\s*|\s*=>\s*|→)\s*(.+)$/i);
+      if (changeMatch) {
+        ops.push({ op: "change", from: changeMatch[2].trim(), to: changeMatch[3].trim() });
+      } else if (delMatch) {
+        ops.push({ op: "del", text: delMatch[2].trim() });
+      } else if (addMatch) {
+        ops.push({ op: "add", text: addMatch[2].trim() });
+      } else {
+        ops.push({ op: "add", text });
+      }
+      continue;
+    }
+
+    if (item && typeof item === "object") {
+      const op = normalizeOp(item.op || item.action || item.type);
+      if (op === "add") {
+        const text = String(item.text || item.value || item.content || "").trim();
+        if (text) ops.push({ op, text });
+        continue;
+      }
+      if (op === "del") {
+        const text = String(item.text || item.value || item.content || "").trim();
+        if (text) ops.push({ op, text });
+        continue;
+      }
+      if (op === "change") {
+        const from = String(item.from || item.old || "").trim();
+        const to = String(item.to || item.new || item.text || "").trim();
+        if (from && to) ops.push({ op, from, to });
+        continue;
+      }
+    }
+  }
+
+  return ops;
+}
+
+function stripIdentityPrefix(line) {
+  const match = String(line || "").match(/^\s*-\s*\[[^\]]+\]\s*(.*)$/);
+  return match ? match[1].trim() : String(line || "").trim();
+}
+
+function formatIdentityLine(text, timestamp) {
+  return `- [${timestamp}] ${text}`;
+}
+
+function matchIdentityLine(lineText, query) {
+  if (!lineText || !query) return false;
+  return lineText.toLowerCase().includes(query.toLowerCase());
+}
+
+function buildConversationEntry(agentKey, reply, round, topic) {
+  const timestamp = formatUtc8();
+  const header = `[${timestamp}] ${agentKey} (Round ${round})`;
+  const body = reply ? reply.trim() : "(空)";
+  return `${header}\nTopic: ${topic || "(待定)"}\n${body}\n\n`;
+}
+
+function appendAndTrimConversation(base, addition, maxChars) {
+  const prefix = base && !base.endsWith("\n") ? "\n" : "";
+  const combined = `${base || ""}${prefix}${addition || ""}`;
+  if (!maxChars || combined.length <= maxChars) return combined;
+  return combined.slice(-maxChars);
+}
+
+class DebateAgent {
   constructor(config, logger) {
     this.config = config;
     this.logger = logger;
-    this.journal = new Journal(config.journalDir);
     this.llm = new LlmClient(config, logger);
+    this.log = new DebateLog(config.journalDir, config.logDir, logger);
+
     ensureDir(config.stateDir);
     this.statusPath = path.join(config.stateDir, "status.json");
-    this.lastCommandsPath = path.join(config.stateDir, "last_commands.md");
-    this.lastJournalPath = path.join(config.stateDir, "last_journal_entry.md");
-    this.lastResponsePath = path.join(config.stateDir, "last_response.json");
-    this.commandStreamPath = path.join(config.stateDir, "command_stream.log");
-    this.lastScriptPath = path.join(config.stateDir, "last_script.py");
-    this.llmRawLogPath = path.join(config.logDir || "logs", "llm_raw.log");
-    this.goalPath = path.join(config.stateDir, "current_goal.json");
-    this.goalHistoryPath = path.join(config.stateDir, "goal_history.json");
+    this.conversationPath = path.join(config.stateDir, "conversation.log");
+    this.lastTurnPath = path.join(config.stateDir, "last_turn.json");
     this.tokenStatsPath = path.join(config.stateDir, "token_stats.json");
-    this.creativeBriefPath = config.creativeBriefPath;
-    ensureDir(path.dirname(this.llmRawLogPath));
-    this.cycle = 0;
-    this.allowlistPatterns = this.buildAllowlist(config.commandAllowlist || []);
+
+    const identityDir = config.identityDir || config.stateDir;
+    ensureDir(identityDir);
+    this.identityAPath = path.join(identityDir, config.identityAFile || "identity_a.md");
+    this.identityBPath = path.join(identityDir, config.identityBFile || "identity_b.md");
+
+    const experienceDir = config.experienceDir || config.stateDir;
+    ensureDir(experienceDir);
+    this.experiencePath = path.join(experienceDir, config.experienceFile || "experience.md");
+
+    const archiveDir = config.archiveDir || path.join(config.stateDir, "archives");
+    ensureDir(archiveDir);
+    this.archiveDir = archiveDir;
+
+    this.round = 0;
+    this.debateRound = 0;
+    this.debateId = 1;
+    this.topic = "";
+    this.lastReplyAt = null;
     this.tokenStats = this.loadTokenStats();
+    this.debateFlow = buildDebateFlow(config.freeDebateRounds);
+
+    this.ensureIdentityFiles();
+    this.loadState();
   }
 
-  buildAllowlist(patterns) {
-    const compiled = [];
-    for (const raw of patterns) {
-      try {
-        compiled.push(new RegExp(raw));
-      } catch (err) {
-        // 忽略非法正则
-      }
+  ensureIdentityFiles() {
+    if (!fs.existsSync(this.identityAPath)) fs.writeFileSync(this.identityAPath, "", "utf8");
+    if (!fs.existsSync(this.identityBPath)) fs.writeFileSync(this.identityBPath, "", "utf8");
+    if (!fs.existsSync(this.conversationPath)) fs.writeFileSync(this.conversationPath, "", "utf8");
+    if (!fs.existsSync(this.experiencePath)) fs.writeFileSync(this.experiencePath, "", "utf8");
+  }
+
+  archiveCurrentDebate(debateId, topic) {
+    if (!fs.existsSync(this.conversationPath)) return;
+    try {
+      const conversationContent = fs.readFileSync(this.conversationPath, "utf8");
+      if (!conversationContent.trim()) return;
+
+      const timestamp = nowIso().replace(/[:.]/g, "-").slice(0, 19);
+      const safeTopic = (topic || "untitled").replace(/[^\w\u4e00-\u9fa5-]/g, "_").slice(0, 50);
+      const archiveFileName = `debate_${debateId}_${timestamp}_${safeTopic}.log`;
+      const archiveFilePath = path.join(this.archiveDir, archiveFileName);
+
+      fs.writeFileSync(archiveFilePath, conversationContent, "utf8");
+
+      fs.writeFileSync(this.conversationPath, "", "utf8");
+
+      this.logger?.info("debate.archived", { debateId, topic, archivePath: archiveFilePath });
+      this.log.appendSystemEvent("archive", `Debate ${debateId} archived to ${archiveFileName}`);
+    } catch (err) {
+      this.logger?.error("debate.archive.failed", { error: err.message });
     }
-    return compiled;
+  }
+
+  loadState() {
+    if (!fs.existsSync(this.statusPath)) return;
+    try {
+      const raw = fs.readFileSync(this.statusPath, "utf8");
+      const data = JSON.parse(raw);
+      this.round = Number.isFinite(data.round) ? data.round : this.round;
+      this.debateRound = Number.isFinite(data.debate_round) ? data.debate_round : this.debateRound;
+      this.debateId = Number.isFinite(data.debate_id) ? data.debate_id : this.debateId;
+      this.topic = typeof data.topic === "string" ? data.topic : this.topic;
+      this.lastReplyAt = data.last_reply_at || this.lastReplyAt;
+    } catch (err) {
+      // ignore
+    }
   }
 
   async runForever() {
-    this.logger?.info("agent.start", { pid: process.pid });
+    this.logger?.info("debate.start", { pid: process.pid });
     while (true) {
-      this.cycle += 1;
       let error = "";
-      let summary = "";
       let sleepSeconds = this.config.loopSleepSeconds;
       try {
-        this.logger?.info("agent.cycle.start", { cycle: this.cycle });
-        const result = await this.runCycle();
-        summary = result.summary;
+        const result = await this.runRound();
         sleepSeconds = result.sleepSeconds;
-        this.logger?.info("agent.cycle.end", { cycle: this.cycle, sleepSeconds });
       } catch (err) {
         error = err && err.message ? err.message : String(err);
-        this.logger?.error("agent.cycle.error", { cycle: this.cycle, error });
+        this.logger?.error("debate.round.error", { error });
+        this.log.appendSystemEvent("error", error);
       }
-      this.writeStatus(summary, error, sleepSeconds);
+      this.writeStatus(error, sleepSeconds);
       await sleep(sleepSeconds);
     }
   }
 
-  async runCycle() {
-    this.resetCommandStream();
-    let loadedGoal = this.loadGoal();
-    if (loadedGoal && this.config.creativeOnly && this.isGoalAvoided(loadedGoal)) {
-      this.logger?.warn("goal.ignored", { reason: "avoid-keywords", goal: loadedGoal });
-      loadedGoal = null;
-    }
-    const journalContext = this.journal.readRecentContext(this.config.contextMaxChars);
-    const commandContext = readTail(this.lastCommandsPath, this.config.contextMaxChars);
-    const goalContext = loadedGoal ? `\n\n当前目标：\n${JSON.stringify(loadedGoal, null, 2)}` : "";
-    const workdir = process.cwd();
-    const creativeBrief = this.readCreativeBrief();
-    const recentGoals = this.readRecentGoals(this.config.goalRecentLimit);
-    const recentGoalsText = recentGoals.length
-      ? recentGoals.map((goal, idx) => `${idx + 1}. ${goal.title} — ${goal.description}`).join("\n")
-      : "(无)";
-    const userPrompt = USER_PROMPT_TEMPLATE
-      .replace("{journal_context}", journalContext)
-      .replace("{command_context}", commandContext || "(暂无命令输出)")
-      .replace("{goal_context}", goalContext)
-      .replace("{workdir}", workdir)
-      .replace("{creative_brief}", creativeBrief || "(无)")
-      .replace("{recent_goals}", recentGoalsText);
+  async runRound() {
+    const nextRound = this.round + 1;
+    const currentDebateId = this.debateId;
+    const nextDebateRound = this.debateRound + 1;
+    const debateStep = this.debateFlow[nextDebateRound - 1] || this.debateFlow[this.debateFlow.length - 1];
+    const debateTotalRounds = this.debateFlow.length;
+    const isDebateStart = nextDebateRound === 1;
+    const isDebateEnd = nextDebateRound === debateTotalRounds;
+    const allowIdentityUpdate = true;
+    const roundTopic = this.topic || "";
 
-    let rawResponse = "";
-    let llmError = "";
-    let cleanedInfo = { cleaned: "", strippedThink: false };
-    let llmUsage = null;
-    try {
-      const llmResult = await this.llm.chat(SYSTEM_PROMPT, userPrompt);
-      rawResponse = llmResult.content;
-      llmUsage = llmResult.usage;
-      cleanedInfo = this.cleanLlmOutput(rawResponse);
-      this.appendLlmRaw(rawResponse, cleanedInfo);
-    } catch (err) {
-      llmError = err && err.message ? err.message : String(err);
-      this.logger?.error("llm.request.failed", { error: llmError });
-      this.appendCommandStream("[llm.error]\n");
-      this.appendCommandStream(`base_url: ${this.config.vllmBaseUrl}\n`);
-      this.appendCommandStream(`error: ${llmError}\n\n`);
-    }
-    const parsedInfo = this.parseWithDiagnostics(cleanedInfo.cleaned || rawResponse);
-    const parsedSafe = parsedInfo.data || {};
+    const conversationContext = readTail(this.conversationPath, this.config.contextMaxChars);
 
-    const summary = String(parsedSafe.summary || "");
-    const thinking = String(parsedSafe.thinking || parsedSafe.thoughts || "");
-    const currentGoal = parsedSafe.current_goal || null;
-    const thisAction = parsedSafe.this_action || null;
-    const plan = parsedSafe.plan || [];
-    const commands = parsedSafe.commands || [];
-    let pythonScript = this.normalizeScript(parsedSafe.python_script || parsedSafe.pythonScript || "");
-    const journal = typeof parsedSafe.journal === "object" && parsedSafe.journal ? parsedSafe.journal : {};
-    let nowWork = String(journal.now_work || "");
-    let outcomes = String(journal.outcomes || "");
-    let nextPlan = String(journal.next_plan || "");
+    const firstAgent = debateStep.order === "B" ? "B" : "A";
+    const secondAgent = firstAgent === "A" ? "B" : "A";
 
-    let nextSleep = parsedSafe.next_sleep_seconds || this.config.loopSleepSeconds;
-    nextSleep = Number.isFinite(Number(nextSleep)) ? Number(nextSleep) : this.config.loopSleepSeconds;
-
-    const planLines = this.normalizeList(plan);
-    let commandList = this.normalizeList(commands);
-    if (this.config.maxCommandsPerCycle > 0) {
-      commandList = commandList.slice(0, this.config.maxCommandsPerCycle);
-    }
-
-    const planFirstStep = planLines[0] || "";
-    const diagnosticKeywords = ["检查", "查看", "确认", "验证", "排查", "状态", "日志", "env", "ps", "df", "ls", "cat", "tail"];
-    const isDiagnosticFirst = diagnosticKeywords.some((kw) => {
-      if (kw === "env") return /^\s*(ls|print)?\s*env\b/.test(planFirstStep);
-      if (kw === "ps") return /^\s*ps\b/.test(planFirstStep);
-      if (kw === "df") return /^\s*df\b/.test(planFirstStep);
-      if (kw === "ls") return /^\s*ls\b/.test(planFirstStep);
-      if (kw === "cat") return /^\s*cat\b/.test(planFirstStep);
-      if (kw === "tail") return /^\s*tail\b/.test(planFirstStep);
-      return planFirstStep.includes(kw);
+    const allowIdentityUpdateAlways = true;
+    const agentFirstResult = await this.queryAgent({
+      agentKey: firstAgent,
+      identityPath: firstAgent === "A" ? this.identityAPath : this.identityBPath,
+      topic: roundTopic,
+      round: nextRound,
+      debateId: currentDebateId,
+      debateRound: nextDebateRound,
+      debateTotalRounds,
+      stageKey: debateStep.key,
+      stageTitle: debateStep.title,
+      stageRule: debateStep.rule,
+      lengthGuide: getStageLengthGuide(debateStep, firstAgent),
+      role: debateStep.roles[firstAgent],
+      task: debateStep.tasks[firstAgent],
+      speakerOrder: "first",
+      allowIdentityUpdate: allowIdentityUpdateAlways,
+      isDebateStart,
+      isDebateEnd,
+      experience: this.readExperience(),
+      conversation: conversationContext
     });
 
-    let blockedReason = "";
-    let policyBlockedReason = "";
-    if (isDiagnosticFirst && !llmError && parsedInfo.data) {
-      blockedReason = `禁止以诊断/检查类操作作为第一步: ${planFirstStep}`;
-      this.logger?.warn("plan.diagnostic.blocked", { firstStep: planFirstStep });
-      this.appendCommandStream("[blocked] 禁止以诊断/检查类操作作为第一步\n");
-      this.appendCommandStream(`first_step: ${planFirstStep}\n`);
+    if (agentFirstResult.error) {
+      const error = `Agent ${firstAgent} failed: ${truncate(agentFirstResult.error, 120)}`;
+      this.log.appendSystemEvent("round_retry", error);
+      throw new Error(error);
     }
 
-    if (!currentGoal && !blockedReason) {
-      if (!llmError && parsedInfo.data) {
-        blockedReason = "必须明确 current_goal";
-        this.logger?.warn("plan.no_current_goal", {});
-        this.appendCommandStream("[blocked] 必须明确 current_goal\n");
-      }
+    const topicAfterFirst = this.pickTopic(roundTopic, agentFirstResult.topic);
+    const virtualFirstEntry = buildConversationEntry(firstAgent, agentFirstResult.reply, nextRound, topicAfterFirst);
+    const conversationAfterFirst = appendAndTrimConversation(
+      conversationContext,
+      virtualFirstEntry,
+      this.config.contextMaxChars
+    );
+
+    const agentSecondResult = await this.queryAgent({
+      agentKey: secondAgent,
+      identityPath: secondAgent === "A" ? this.identityAPath : this.identityBPath,
+      topic: topicAfterFirst,
+      round: nextRound,
+      debateId: currentDebateId,
+      debateRound: nextDebateRound,
+      debateTotalRounds,
+      stageKey: debateStep.key,
+      stageTitle: debateStep.title,
+      stageRule: debateStep.rule,
+      lengthGuide: getStageLengthGuide(debateStep, secondAgent),
+      role: debateStep.roles[secondAgent],
+      task: debateStep.tasks[secondAgent],
+      speakerOrder: "second",
+      allowIdentityUpdate: allowIdentityUpdateAlways,
+      isDebateStart,
+      isDebateEnd,
+      experience: this.readExperience(),
+      conversation: conversationAfterFirst
+    });
+
+    if (agentSecondResult.error) {
+      const error = `Agent ${secondAgent} failed: ${truncate(agentSecondResult.error, 120)}`;
+      this.log.appendSystemEvent("round_retry", error);
+      throw new Error(error);
     }
 
-    if (!blockedReason) {
-      const policyBlock = this.checkGoalPolicy(currentGoal, loadedGoal, recentGoals);
-      if (policyBlock) {
-        blockedReason = policyBlock;
-        policyBlockedReason = policyBlock;
-        this.logger?.warn("goal.policy.blocked", { reason: policyBlock });
-        this.appendCommandStream(`[blocked] ${policyBlock}\n`);
-      }
+    const topicAfterSecond = this.pickTopic(topicAfterFirst, agentSecondResult.topic);
+    this.log.appendRoundStart(nextRound, roundTopic);
+    this.appendConversation(`\n=== Round ${nextRound} | Topic: ${roundTopic || "(待确定)"} ===\n`);
+    if (topicAfterFirst && topicAfterFirst !== roundTopic) {
+      this.log.appendTopicChange(roundTopic, topicAfterFirst, firstAgent);
+    }
+    this.appendAgentReply(firstAgent, agentFirstResult.reply, nextRound, topicAfterFirst);
+    if (topicAfterSecond && topicAfterSecond !== topicAfterFirst) {
+      this.log.appendTopicChange(topicAfterFirst, topicAfterSecond, secondAgent);
+    }
+    this.appendAgentReply(secondAgent, agentSecondResult.reply, nextRound, topicAfterSecond);
+
+    const resultsByAgent = {
+      [agentFirstResult.agentKey]: agentFirstResult,
+      [agentSecondResult.agentKey]: agentSecondResult
+    };
+
+    this.applyIdentityUpdate("A", resultsByAgent.A ? resultsByAgent.A.planUpdate : []);
+    this.applyIdentityUpdate("B", resultsByAgent.B ? resultsByAgent.B.planUpdate : []);
+
+    this.round = nextRound;
+    const resolvedTopic = topicAfterSecond || topicAfterFirst || roundTopic;
+    this.topic = resolvedTopic;
+    this.debateRound = isDebateEnd ? 0 : nextDebateRound;
+
+    const lastTurn = {
+      round: nextRound,
+      debate_round: nextDebateRound,
+      debate_id: currentDebateId,
+      stage: debateStep.title,
+      topic: resolvedTopic,
+      agentA: resultsByAgent.A,
+      agentB: resultsByAgent.B
+    };
+    fs.writeFileSync(this.lastTurnPath, JSON.stringify(lastTurn, null, 2), "utf8");
+
+    if (isDebateEnd) {
+      this.appendExperienceUpdate(currentDebateId, resolvedTopic, [
+        { agentKey: "A", updates: lastTurn.agentA.experienceUpdate },
+        { agentKey: "B", updates: lastTurn.agentB.experienceUpdate }
+      ]);
+      this.resetIdentityFiles();
+      this.topic = "";
+      this.log.appendSystemEvent("debate_end", `Debate ${currentDebateId} completed`);
+      this.debateId += 1;
     }
 
-    if (blockedReason) {
-      if (!String(nowWork).trim()) {
-        nowWork = `阻止不合规计划：${blockedReason}`;
-      }
-      if (!String(outcomes).trim()) {
-        outcomes = "未执行任何命令或脚本。";
-      }
-      if (!String(nextPlan).trim()) {
-        nextPlan = "下一轮需生成合规且创作导向的目标与行动。";
-      }
-      commandList = [];
-      pythonScript = "";
-    }
+    return { sleepSeconds: Math.max(1, this.config.loopSleepSeconds) };
+  }
 
-    const rawText = String(rawResponse || "").trim();
-    const cleanedText = String(cleanedInfo.cleaned || "").trim();
-    const missingJournal = !String(nowWork).trim() || !String(outcomes).trim() || !String(nextPlan).trim();
-    if (!parsedInfo.data || missingJournal || llmError) {
-      this.logger?.warn("llm.output.invalid", {
-        parsed: Boolean(parsedInfo.data),
-        extracted: parsedInfo.extracted,
-        repaired: parsedInfo.repaired,
-        strippedThink: cleanedInfo.strippedThink,
-        missingJournal,
-        error: parsedInfo.error || "",
-        llmError
-      });
-      if (rawText) {
-        this.appendCommandStream("=== LLM DEBUG ===\n");
-        this.appendCommandStream(`parsed: ${Boolean(parsedInfo.data)} | extracted: ${parsedInfo.extracted}\n`);
-        this.appendCommandStream(`repaired: ${parsedInfo.repaired}\n`);
-        this.appendCommandStream(`stripped_think: ${cleanedInfo.strippedThink}\n`);
-        if (parsedInfo.error) {
-          this.appendCommandStream(`parse_error: ${parsedInfo.error}\n`);
-        }
-        if (llmError) {
-          this.appendCommandStream(`request_error: ${llmError}\n`);
-        }
-        this.appendCommandStream(`raw_chars: ${rawText.length}\n`);
-        if (parsedInfo.data) {
-          const jsonText = truncate(JSON.stringify(parsedInfo.data, null, 2), 4000);
-          this.appendCommandStream("[llm.json]\n");
-          this.appendCommandStream(`${jsonText}\n`);
-        }
-        this.appendCommandStream("[llm.raw]\n");
-        this.appendCommandStream(`${truncate(rawText, 12000)}\n\n`);
-        if (cleanedText && cleanedText !== rawText) {
-          this.appendCommandStream("[llm.cleaned]\n");
-          this.appendCommandStream(`${truncate(cleanedText, 12000)}\n\n`);
-        }
-      } else if (llmError) {
-        this.appendCommandStream("=== LLM DEBUG ===\n");
-        this.appendCommandStream(`parsed: false | extracted: ${parsedInfo.extracted}\n`);
-        this.appendCommandStream(`repaired: ${parsedInfo.repaired}\n`);
-        this.appendCommandStream(`stripped_think: ${cleanedInfo.strippedThink}\n`);
-        if (parsedInfo.error) {
-          this.appendCommandStream(`parse_error: ${parsedInfo.error}\n`);
-        }
-        this.appendCommandStream(`request_error: ${llmError}\n\n`);
-      }
-    }
+  pickTopic(current, proposed) {
+    const trimmed = String(proposed || "").trim();
+    if (!trimmed) return current;
+    return trimmed;
+  }
 
-    if (!pythonScript && commandList.length) {
-      pythonScript = this.buildScriptFromCommands(commandList);
-      this.appendCommandStream("[llm.repair] generated python_script from commands\n");
-    }
+  async queryAgent({
+    agentKey,
+    identityPath,
+    topic,
+    round,
+    debateId,
+    debateRound,
+    debateTotalRounds,
+    stageKey,
+    stageTitle,
+    stageRule,
+    lengthGuide,
+    role,
+    task,
+    speakerOrder,
+    allowIdentityUpdate,
+    isDebateStart,
+    isDebateEnd,
+    experience,
+    conversation
+  }) {
+    const identity = this.readIdentity(identityPath);
+    const { systemPrompt, userPrompt } = buildDebatePrompts({
+      agentKey,
+      round,
+      debateId,
+      debateRound,
+      debateTotalRounds,
+      stageKey,
+      stageTitle,
+      stageRule,
+      lengthGuide,
+      role,
+      task,
+      speakerOrder,
+      topic: topic || "",
+      identity,
+      allowIdentityUpdate,
+      experience,
+      isDebateStart,
+      isDebateEnd,
+      conversation
+    });
 
+    let rawResponse = "";
+    let llmUsage = null;
+    let llmError = "";
+    const model = this.getModelForAgent(agentKey);
 
-    let commandResults = [];
-    if (pythonScript) {
-      commandResults = await this.executePythonScript(pythonScript, commandList);
-    } else {
-      if (commandList.length) {
-        this.logger?.warn("script.missing", { cycle: this.cycle });
-        this.appendCommandStream("[warn] python_script missing; running commands directly.\n");
-      }
-      commandResults = await this.executeCommands(commandList);
-    }
-    this.writeCommands(commandResults);
-
-    const { filePath, entry } = this.journal.appendEntry(nowWork, outcomes, nextPlan);
-    fs.writeFileSync(this.lastJournalPath, entry, "utf8");
-
-    const allowGoalPersistence = !policyBlockedReason;
-    if (allowGoalPersistence) {
-      if (currentGoal && currentGoal.phase === "completed") {
-        this.archiveGoal(currentGoal);
-        this.appendCommandStream(`[goal.completed] ${currentGoal.title}\n`);
-      } else if (currentGoal) {
-        this.saveGoal(currentGoal);
-      }
+    try {
+      const result = await this.llm.chat(systemPrompt, userPrompt, { model });
+      rawResponse = result.content || "";
+      llmUsage = result.usage || null;
+    } catch (err) {
+      llmError = err && err.message ? err.message : String(err);
+      this.logger?.error("debate.llm.failed", { agent: agentKey, error: llmError });
+      this.log.appendSystemEvent("llm_error", `${agentKey}: ${llmError}`);
     }
 
     if (llmUsage) {
       this.updateTokenStats(llmUsage);
     }
 
-    fs.writeFileSync(
-      this.lastResponsePath,
-      JSON.stringify(
-        {
-          summary,
-          thinking,
-          current_goal: currentGoal,
-          this_action: thisAction,
-          plan: planLines,
-          commands: commandList,
-          python_script: pythonScript,
-          journal: { now_work: nowWork, outcomes, next_plan: nextPlan },
-          raw: rawResponse,
-          raw_cleaned: cleanedText,
-          error: llmError
-        },
-        null,
-        2
-      ),
-      "utf8"
-    );
+    const parsed = this.parseAgentResponse(rawResponse);
+    const reply = parsed.reply || (llmError ? `(API error: ${truncate(llmError, 120)})` : "(无回复)");
+    const planUpdate = allowIdentityUpdate ? parsed.planUpdate : [];
+    const experienceUpdate = parsed.experienceUpdate || [];
 
-    return { summary, sleepSeconds: Math.max(1, nextSleep) };
+    return {
+      agentKey,
+      reply,
+      topic: parsed.topic || topic || "",
+      planUpdate,
+      experienceUpdate,
+      raw: rawResponse,
+      error: llmError
+    };
+  }
+
+  parseAgentResponse(raw) {
+    const text = String(raw || "").trim();
+    if (!text) {
+      return { reply: "", topic: "", planUpdate: [], experienceUpdate: [] };
+    }
+
+    const json = safeJsonExtract(text);
+    if (!json || typeof json !== "object") {
+      return { reply: text, topic: "", planUpdate: [], experienceUpdate: [] };
+    }
+
+    const reply = String(json.reply || json.response || "").trim();
+    const topic = String(json.topic || "").trim();
+    const update = json.plan_update || json.planUpdate || json.identity_update || json.identityUpdate || [];
+    const planUpdate = this.normalizeUpdateList(update);
+    const expUpdate = json.experience_update || json.experienceUpdate || [];
+    const experienceUpdate = this.normalizeList(expUpdate);
+    return { reply, topic, planUpdate, experienceUpdate };
   }
 
   normalizeList(value) {
     if (Array.isArray(value)) {
-      return value.map((item) => String(item).trim()).filter(Boolean);
+      return value
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter(Boolean);
     }
     if (typeof value === "string" && value.trim()) {
-      return [value.trim()];
+      return value
+        .split("\n")
+        .map((item) => item.replace(/^[-*]\s*/, "").trim())
+        .filter(Boolean);
     }
     return [];
   }
 
-  normalizeScript(value) {
+  normalizeUpdateList(value) {
     if (Array.isArray(value)) {
-      const lines = value.map((line) => String(line));
-      const joined = lines.join("\n").trim();
-      return joined ? joined : "";
+      return value
+        .map((item) => {
+          if (typeof item === "string") return item.trim();
+          if (item && typeof item === "object") return item;
+          return null;
+        })
+        .filter(Boolean);
     }
-    if (typeof value !== "string") return "";
-    const trimmed = value.trim();
-    return trimmed ? trimmed : "";
+    if (value && typeof value === "object") {
+      return [value];
+    }
+    if (typeof value === "string" && value.trim()) {
+      return value
+        .split("\n")
+        .map((item) => item.replace(/^[-*]\s*/, "").trim())
+        .filter(Boolean);
+    }
+    return [];
   }
 
-  readCreativeBrief() {
-    if (this.creativeBriefPath && fs.existsSync(this.creativeBriefPath)) {
-      try {
-        const content = fs.readFileSync(this.creativeBriefPath, "utf8");
-        return content.trim();
-      } catch (err) {
-        return "";
-      }
-    }
-    return String(process.env.CREATIVE_BRIEF || "").trim();
-  }
-
-  readRecentGoals(limit) {
-    if (!fs.existsSync(this.goalHistoryPath)) return [];
+  readIdentity(identityPath) {
+    if (!fs.existsSync(identityPath)) return "";
     try {
-      const raw = fs.readFileSync(this.goalHistoryPath, "utf8");
-      const history = JSON.parse(raw);
-      if (!Array.isArray(history)) return [];
-      const count = Math.max(0, Number(limit) || 0);
-      if (!count) return [];
-      return history.slice(-count).reverse().map((goal) => ({
-        id: String(goal.id || ""),
-        title: String(goal.title || ""),
-        description: String(goal.description || "")
-      }));
+      return fs.readFileSync(identityPath, "utf8").trim();
     } catch (err) {
-      return [];
+      return "";
     }
   }
 
-  isGoalAvoided(goal) {
-    if (!goal) return false;
-    const goalText = `${goal.title || ""} ${goal.description || ""}`.toLowerCase();
-    const avoidKeywords = Array.isArray(this.config.goalAvoidKeywords)
-      ? this.config.goalAvoidKeywords
-      : [];
-    return avoidKeywords.some((kw) => kw && goalText.includes(String(kw).toLowerCase()));
-  }
+  applyIdentityUpdate(agentKey, updates) {
+    if (!updates || !updates.length) return;
+    const identityPath = agentKey === "A" ? this.identityAPath : this.identityBPath;
+    const timestamp = formatUtc8();
+    const ops = parseIdentityOps(updates);
+    if (!ops.length) return;
 
-  checkGoalPolicy(currentGoal, loadedGoal, recentGoals) {
-    if (!currentGoal || !this.config.creativeOnly) return "";
-    const isNewGoal = !loadedGoal || loadedGoal.id !== currentGoal.id;
-    const goalText = `${currentGoal.title || ""} ${currentGoal.description || ""}`.toLowerCase();
-    if (this.isGoalAvoided(currentGoal)) {
-      return "目标命中运维/工具类关键词，已阻止并要求创作型目标";
-    }
+    const raw = fs.existsSync(identityPath) ? fs.readFileSync(identityPath, "utf8") : "";
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    let changed = false;
+    let updatedLines = [...lines];
+    const applied = [];
 
-    if (isNewGoal && Array.isArray(recentGoals) && recentGoals.length) {
-      const normalized = goalText.replace(/\s+/g, "");
-      const repeated = recentGoals.some((goal) => {
-        const title = String(goal.title || "").toLowerCase().replace(/\s+/g, "");
-        const desc = String(goal.description || "").toLowerCase().replace(/\s+/g, "");
-        return (title && normalized.includes(title)) || (desc && normalized.includes(desc));
-      });
-      if (repeated) {
-        return "新目标与近期目标高度重复，已阻止并要求显著不同的创作主题";
-      }
-    }
-
-    return "";
-  }
-
-  parseWithDiagnostics(raw) {
-    const text = String(raw || "");
-    const trimmed = text.trim();
-    if (!trimmed) {
-      return { data: null, error: "empty response", extracted: false, repaired: false };
-    }
-    try {
-      return { data: JSON.parse(trimmed), error: "", extracted: false, repaired: false };
-    } catch (err) {
-      const primaryError = err && err.message ? err.message : String(err);
-      const start = trimmed.indexOf("{");
-      const end = trimmed.lastIndexOf("}");
-      if (start !== -1 && end !== -1 && end > start) {
-        const slice = trimmed.slice(start, end + 1);
-        try {
-          return { data: JSON.parse(slice), error: primaryError, extracted: true, repaired: false };
-        } catch (inner) {
-          const innerError = inner && inner.message ? inner.message : String(inner);
-          const repaired = this.tryRepairJson(slice);
-          if (repaired) {
-            return { data: repaired, error: `${primaryError}; repaired`, extracted: true, repaired: true };
-          }
-          return {
-            data: null,
-            error: `${primaryError}; extract failed: ${innerError}`,
-            extracted: true,
-            repaired: false
-          };
-        }
-      }
-      const repaired = this.tryRepairJson(trimmed);
-      if (repaired) {
-        return { data: repaired, error: `${primaryError}; repaired`, extracted: false, repaired: true };
-      }
-      return { data: null, error: `${primaryError}; no json object found`, extracted: false, repaired: false };
-    }
-  }
-
-  tryRepairJson(text) {
-    if (!text) return null;
-    const braceStart = text.indexOf("{");
-    if (braceStart === -1) return null;
-    const candidate = text.slice(braceStart);
-    const scriptIndex = candidate.indexOf("\"python_script\"");
-    if (scriptIndex === -1) return null;
-    const before = candidate.slice(0, scriptIndex).replace(/,\s*$/, "");
-    const repaired = `${before}\n}`;
-    try {
-      return JSON.parse(repaired);
-    } catch (err) {
-      return null;
-    }
-  }
-
-  buildScriptFromCommands(commands) {
-    const safe = commands.map((item) => String(item));
-    const lines = [
-      "import subprocess",
-      "commands = ["
-    ];
-    for (const cmd of safe) {
-      lines.push(`    ${JSON.stringify(cmd)},`);
-    }
-    lines.push("]");
-    lines.push("for cmd in commands:");
-    lines.push("    print(f'>>> $ {cmd}', flush=True)");
-    lines.push("    result = subprocess.run(cmd, shell=True, text=True, capture_output=True)");
-    lines.push("    if result.stdout:");
-    lines.push("        print(result.stdout, end='', flush=True)");
-    lines.push("    if result.stderr:");
-    lines.push("        print(result.stderr, end='', flush=True)");
-    lines.push("    if result.returncode != 0:");
-    lines.push("        print(f'[exit {result.returncode}]', flush=True)");
-    lines.push("        break");
-    return lines.join("\n");
-  }
-  async executeCommands(commands) {
-    const results = [];
-    if (!this.config.allowCommandExecution) return results;
-
-    for (const command of commands) {
-      if (!command.trim()) continue;
-      if (!this.isCommandAllowed(command)) {
-        this.logger?.warn("command.blocked", { command });
-        this.appendCommandStream(`[blocked] ${command}\n`);
-        results.push({ command, status: "blocked", output: "Command blocked" });
+    for (const op of ops) {
+      if (op.op === "add" && op.text) {
+        updatedLines.push(formatIdentityLine(op.text, timestamp));
+        applied.push(`add: ${op.text}`);
+        changed = true;
         continue;
       }
-      try {
-        this.logger?.info("command.start", { command });
-        this.appendCommandStream(`>>> $ ${command}\n`);
-        const output = await this.execProcess("bash", ["-lc", command]);
-        this.logger?.info("command.end", { command, status: output.status });
-        this.appendCommandStream(`\n[status: ${output.status}]\n\n`);
-        results.push({ command, status: output.status, output: output.output });
-      } catch (err) {
-        this.logger?.error("command.error", { command, error: err.message || String(err) });
-        this.appendCommandStream(`[error] ${err.message || String(err)}\n`);
-        results.push({ command, status: "error", output: err.message || String(err) });
+      if (op.op === "del" && op.text) {
+        const before = updatedLines.length;
+        updatedLines = updatedLines.filter((line) => !matchIdentityLine(stripIdentityPrefix(line), op.text));
+        if (updatedLines.length !== before) {
+          applied.push(`del: ${op.text}`);
+          changed = true;
+        }
+        continue;
+      }
+      if (op.op === "change" && op.from && op.to) {
+        const index = updatedLines.findIndex((line) => matchIdentityLine(stripIdentityPrefix(line), op.from));
+        if (index !== -1) {
+          updatedLines[index] = formatIdentityLine(op.to, timestamp);
+          applied.push(`change: ${op.from} -> ${op.to}`);
+          changed = true;
+        } else {
+          updatedLines.push(formatIdentityLine(op.to, timestamp));
+          applied.push(`change: ${op.from} -> ${op.to}`);
+          changed = true;
+        }
       }
     }
 
-    return results;
-  }
-
-  async executePythonScript(script, commands) {
-    const results = [];
-    if (!this.config.allowCommandExecution) return results;
-    if (!script) return results;
-
-    const blockedReason = this.validateCommandsForScript(commands);
-    if (blockedReason) {
-      this.logger?.warn("script.blocked", { reason: blockedReason });
-      this.appendCommandStream(`[blocked] ${blockedReason}\n`);
-      results.push({ command: "python_script", status: "blocked", output: blockedReason });
-      return results;
+    if (changed) {
+      const payload = updatedLines.length ? `${updatedLines.join("\n")}\n` : "";
+      fs.writeFileSync(identityPath, payload, "utf8");
+      this.log.appendIdentityUpdate(agentKey, applied, timestamp);
     }
-
-    fs.writeFileSync(this.lastScriptPath, script, "utf8");
-    const runner = `${this.config.pythonBin} -u ${this.lastScriptPath}`;
-    this.logger?.info("script.start", { runner });
-    this.appendCommandStream(`>>> $ ${runner}\n`);
-    const output = await this.execProcess(this.config.pythonBin, ["-u", this.lastScriptPath]);
-    this.logger?.info("script.end", { runner, status: output.status });
-    this.appendCommandStream(`\n[status: ${output.status}]\n\n`);
-    results.push({ command: "python_script", status: output.status, output: output.output });
-    return results;
   }
 
-  validateCommandsForScript(commands) {
-    if (this.config.allowUnsafeCommands) return "";
-    if (!commands || !commands.length) {
-      return "Commands list is required when ALLOW_UNSAFE_COMMANDS=false";
-    }
-    for (const command of commands) {
-      if (!this.isCommandAllowed(command)) {
-        return `Command blocked: ${command}`;
-      }
-    }
-    return "";
+  appendConversation(line) {
+    fs.appendFileSync(this.conversationPath, line, "utf8");
   }
 
-  execProcess(command, args) {
-    return new Promise((resolve) => {
-      const timeoutMs = Math.max(1, this.config.commandTimeoutSeconds) * 1000;
-      const child = spawn(command, args, {
-        shell: false,
-        env: process.env
-      });
-
-      let output = "";
-      let outputTruncated = false;
-      let timedOut = false;
-
-      const handleChunk = (chunk) => {
-        const text = chunk.toString();
-        if (text) this.appendCommandStream(text);
-        if (!outputTruncated) {
-          const remaining = 8000 - output.length;
-          if (remaining > 0) {
-            output += text.slice(0, remaining);
-          }
-          if (output.length >= 8000) {
-            outputTruncated = true;
-          }
-        }
-      };
-
-      const timer = setTimeout(() => {
-        timedOut = true;
-        this.appendCommandStream(`\n[timeout after ${this.config.commandTimeoutSeconds}s]\n`);
-        child.kill("SIGKILL");
-      }, timeoutMs);
-
-      child.stdout.on("data", handleChunk);
-      child.stderr.on("data", handleChunk);
-      child.on("error", (err) => {
-        clearTimeout(timer);
-        resolve({ status: "error", output: err.message || String(err) });
-      });
-      child.on("close", (code, signal) => {
-        clearTimeout(timer);
-        let status = "exit 0";
-        if (timedOut) {
-          status = "timeout";
-        } else if (signal) {
-          status = `signal ${signal}`;
-        } else if (typeof code === "number") {
-          status = `exit ${code}`;
-        }
-        const combined = outputTruncated ? `${output}...` : output;
-        const trimmed = combined.trim();
-        resolve({ status, output: trimmed ? truncate(trimmed, 2000) : "(no output)" });
-      });
-    });
+  appendAgentReply(agentKey, reply, round, topic) {
+    const timestamp = formatUtc8();
+    const header = `[${timestamp}] ${agentKey} (Round ${round})`;
+    const body = reply ? reply.trim() : "(空)";
+    const content = `${header}\nTopic: ${topic || "(待定)"}\n${body}\n\n`;
+    this.appendConversation(content);
+    this.log.appendMessage(agentKey, body, round, topic, timestamp);
+    this.lastReplyAt = nowIso();
   }
 
-  isCommandAllowed(command) {
-    if (this.config.allowUnsafeCommands) return true;
-    if (!this.allowlistPatterns.length) return false;
-    return this.allowlistPatterns.some((pattern) => pattern.test(command));
-  }
-
-  writeCommands(results) {
-    if (!results.length) return;
-    const lines = [];
-    for (const item of results) {
-      lines.push(`### $ ${item.command}`);
-      lines.push(`Status: ${item.status}`);
-      lines.push("```");
-      lines.push(item.output);
-      lines.push("```");
-      lines.push("");
-    }
-    fs.writeFileSync(this.lastCommandsPath, lines.join("\n"), "utf8");
-  }
-
-  resetCommandStream() {
-    fs.writeFileSync(this.commandStreamPath, "", "utf8");
-  }
-
-  appendCommandStream(text) {
-    if (!text) return;
-    fs.appendFileSync(this.commandStreamPath, text, "utf8");
-  }
-
-  cleanLlmOutput(raw) {
-    const text = String(raw || "");
-    const trimmed = text.trim();
-    if (!trimmed) return { cleaned: "", strippedThink: false };
-    let cleaned = trimmed.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-    let strippedThink = cleaned !== trimmed;
-    if (!cleaned && trimmed) {
-      cleaned = trimmed;
-    }
-    if (cleaned.includes("<think>")) {
-      strippedThink = true;
-      const firstBrace = cleaned.indexOf("{");
-      cleaned = (firstBrace !== -1 ? cleaned.slice(firstBrace) : cleaned).replace(/<think>/gi, "").trim();
-    }
-    const fenceMatch = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-    if (fenceMatch) {
-      cleaned = fenceMatch[1].trim();
-    }
-    return { cleaned, strippedThink };
-  }
-
-  appendLlmRaw(raw, cleanedInfo) {
-    if (!raw) return;
-    const header = `--- ${nowIso()} cycle:${this.cycle} ---\n`;
-    let payload = header + String(raw).trim() + "\n\n";
-    if (cleanedInfo && cleanedInfo.strippedThink && cleanedInfo.cleaned) {
-      payload += `[cleaned]\n${String(cleanedInfo.cleaned).trim()}\n\n`;
-    }
-    fs.appendFileSync(this.llmRawLogPath, payload, "utf8");
-  }
-
-  writeStatus(summary, error, sleepSeconds) {
+  writeStatus(lastError, sleepSeconds) {
+    const llmStatus = this.llm.getStatus();
+    const stageMeta = this.getDebateStageMeta();
     const status = {
-      cycle: this.cycle,
-      last_summary: summary,
-      last_error: error || "",
-      last_run_at: nowIso(),
+      round: this.round,
+      debate_round: this.debateRound,
+      debate_id: this.debateId,
+      debate_stage: stageMeta.title,
+      debate_stage_key: stageMeta.key,
+      debate_stage_rule: stageMeta.rule,
+      debate_stage_length: stageMeta.lengthGuide,
+      debate_total_rounds: this.debateFlow.length,
+      topic: this.topic,
+      last_reply_at: this.lastReplyAt || nowIso(),
       sleep_seconds: sleepSeconds,
-      token_stats: this.tokenStats
+      token_stats: this.tokenStats,
+      api_status: llmStatus
     };
+
+    if (lastError) {
+      status.last_error = lastError;
+    }
+
     fs.writeFileSync(this.statusPath, JSON.stringify(status, null, 2), "utf8");
-  }
-
-  loadGoal() {
-    if (!fs.existsSync(this.goalPath)) {
-      return null;
-    }
-    try {
-      const raw = fs.readFileSync(this.goalPath, "utf8");
-      return JSON.parse(raw);
-    } catch (err) {
-      return null;
-    }
-  }
-
-  saveGoal(goal) {
-    if (!goal) return;
-    fs.writeFileSync(this.goalPath, JSON.stringify(goal, null, 2), "utf8");
-  }
-
-  archiveGoal(goal) {
-    if (!goal) return;
-    let history = [];
-    try {
-      if (fs.existsSync(this.goalHistoryPath)) {
-        history = JSON.parse(fs.readFileSync(this.goalHistoryPath, "utf8"));
-      }
-    } catch (err) {}
-
-    goal.completed_at = nowIso();
-    goal.cycles = this.cycle;
-    history.push(goal);
-    fs.writeFileSync(this.goalHistoryPath, JSON.stringify(history, null, 2), "utf8");
-    fs.unlinkSync(this.goalPath);
   }
 
   loadTokenStats() {
@@ -724,6 +614,63 @@ class Agent {
       this.logger?.error("token.stats.save.failed", { error: err.message });
     }
   }
+
+  getDebateStageMeta() {
+    if (!this.debateRound) {
+      return { key: "-", title: "-", rule: "-", lengthGuide: "-" };
+    }
+    const step = this.debateFlow[this.debateRound - 1];
+    if (!step) {
+      return { key: "-", title: "-", rule: "-", lengthGuide: "-" };
+    }
+    return {
+      key: step.key || "-",
+      title: step.title || "-",
+      rule: step.rule || "-",
+      lengthGuide: formatStageLengthGuide(step)
+    };
+  }
+
+  getModelForAgent(agentKey) {
+    const fallback = this.config.vllmModel;
+    if (agentKey === "A") return this.config.vllmModelA || fallback;
+    if (agentKey === "B") return this.config.vllmModelB || fallback;
+    return fallback;
+  }
+
+  resetIdentityFiles() {
+    fs.writeFileSync(this.identityAPath, "", "utf8");
+    fs.writeFileSync(this.identityBPath, "", "utf8");
+  }
+
+  readExperience() {
+    const maxChars = this.config.experienceMaxChars || 3000;
+    if (!fs.existsSync(this.experiencePath)) return "";
+    const data = fs.readFileSync(this.experiencePath, "utf8");
+    if (data.length <= maxChars) return data;
+    return data.slice(-maxChars);
+  }
+
+  appendExperienceUpdate(debateId, topic, updatesByAgent) {
+    const timestamp = formatUtc8();
+    const lines = [
+      `## [${timestamp}] Debate ${debateId} | Topic: ${topic || "(待定)"}`
+    ];
+
+    let hasUpdates = false;
+    for (const item of updatesByAgent || []) {
+      if (!item || !Array.isArray(item.updates) || !item.updates.length) continue;
+      hasUpdates = true;
+      lines.push(`- ${item.agentKey}: ${item.updates.join("；")}`);
+    }
+
+    if (!hasUpdates) {
+      lines.push("- (无经验总结)");
+    }
+
+    fs.appendFileSync(this.experiencePath, `${lines.join("\n")}\n\n`, "utf8");
+    this.log.appendEvent("experience_update", { topic, updates: updatesByAgent });
+  }
 }
 
-module.exports = { Agent };
+module.exports = { DebateAgent };

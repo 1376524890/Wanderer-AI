@@ -1,65 +1,87 @@
-/* 用途：读取与追加 Markdown 探索日志。
-不负责：决定代理要做什么。
-输入：日志条目与上下文长度限制。
-输出：更新后的日志文件与上下文摘要。
-关联：src/agent.js, src/prompts.js。
+/* 用途：记录辩论事件与可读日志。
+不负责：代理决策或界面渲染。
+输入：对话、身份更新、系统事件。
+输出：日志文件与每日摘要。
+关联：src/agent.js。
 */
 
 const fs = require("fs");
 const path = require("path");
-const { ensureDir, readTail, truncate } = require("./utils");
+const { ensureDir, formatUtc8 } = require("./utils");
 
-class Journal {
-  constructor(journalDir) {
-    this.journalDir = journalDir;
-    ensureDir(journalDir);
+class DebateLog {
+  constructor(journalDir, logDir, logger) {
+    this.journalDir = journalDir || "journal";
+    this.logDir = logDir || "logs";
+    this.logger = logger;
+    ensureDir(this.journalDir);
+    ensureDir(this.logDir);
+    this.eventLogPath = path.join(this.logDir, "debate_events.jsonl");
   }
 
-  appendEntry(nowWork, outcomes, nextPlan) {
-    const now = new Date();
-    const day = now.toISOString().slice(0, 10);
-    const time = now.toISOString().slice(11, 19) + " UTC";
-    const entry = [
-      `## ${time}`,
-      "",
-      "**正在进行的工作**",
-      String(nowWork || "").trim(),
-      "",
-      "**达成的成果**",
-      String(outcomes || "").trim(),
-      "",
-      "**下一步计划**",
-      String(nextPlan || "").trim(),
-      "",
+  appendEvent(type, payload) {
+    const record = {
+      ts: new Date().toISOString(),
+      type,
+      payload
+    };
+    try {
+      fs.appendFileSync(this.eventLogPath, `${JSON.stringify(record)}\n`, "utf8");
+    } catch (err) {
+      this.logger?.error("debate.log.failed", { error: err.message || String(err) });
+    }
+  }
+
+  appendRoundStart(round, topic) {
+    const stamp = formatUtc8();
+    this.appendEvent("round_start", { round, topic });
+    this.appendJournalLine(`\n## ${stamp} Round ${round} | Topic: ${topic || "(待定)"}\n`);
+  }
+
+  appendMessage(agentKey, reply, round, topic, timestamp) {
+    this.appendEvent("message", { round, agent: agentKey, topic, reply });
+    const stamp = timestamp || formatUtc8();
+    const lines = [
+      `**${agentKey}** (${stamp})`,
+      `Topic: ${topic || "(待定)"}`,
+      reply || "(空)",
       ""
     ].join("\n");
-    const filePath = path.join(this.journalDir, `${day}.md`);
-    fs.appendFileSync(filePath, entry, "utf8");
-    return { filePath, entry };
+    this.appendJournalLine(lines);
   }
 
-  readRecentContext(maxChars) {
-    if (!fs.existsSync(this.journalDir)) return "(No history yet)";
-    const files = fs.readdirSync(this.journalDir)
-      .filter((name) => name.endsWith(".md") && name !== "README.md")
-      .sort()
-      .map((name) => path.join(this.journalDir, name));
-    if (!files.length) return "(No history yet)";
+  appendIdentityUpdate(agentKey, updates, timestamp) {
+    if (!updates || !updates.length) return;
+    this.appendEvent("identity_update", { agent: agentKey, updates });
+    const stamp = timestamp || formatUtc8();
+    const lines = [
+      `**${agentKey} identity update** (${stamp})`,
+      ...updates.map((item) => `- ${item}`),
+      ""
+    ].join("\n");
+    this.appendJournalLine(lines);
+  }
 
-    const collected = [];
-    let remaining = maxChars;
-    const recentFiles = files.slice(-3).reverse();
-    for (const filePath of recentFiles) {
-      let content = readTail(filePath, maxChars);
-      content = truncate(content, remaining);
-      if (content) {
-        collected.push(`### ${path.basename(filePath)}\n${content}`);
-        remaining -= content.length;
-      }
-      if (remaining <= 0) break;
-    }
-    return collected.reverse().join("\n\n");
+  appendTopicChange(fromTopic, toTopic, by) {
+    this.appendEvent("topic_change", { from: fromTopic || "", to: toTopic || "", by });
+    const stamp = formatUtc8();
+    const line = `**Topic change** (${stamp}) ${fromTopic || "(空)"} -> ${toTopic || "(空)"}`;
+    this.appendJournalLine(`${line}\n`);
+  }
+
+  appendSystemEvent(event, detail) {
+    this.appendEvent("system", { event, detail });
+    const stamp = formatUtc8();
+    const line = `**System** (${stamp}) ${event}: ${detail}`;
+    this.appendJournalLine(`${line}\n`);
+  }
+
+  appendJournalLine(text) {
+    const now = new Date();
+    const day = now.toISOString().slice(0, 10);
+    const filePath = path.join(this.journalDir, `${day}.md`);
+    fs.appendFileSync(filePath, `${text}\n`, "utf8");
   }
 }
 
-module.exports = { Journal };
+module.exports = { DebateLog };

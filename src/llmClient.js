@@ -1,4 +1,4 @@
-/* 用途：调用 OpenAI 兼容接口（zhipu 或 vLLM）并带重试机制。
+/* 用途：调用 OpenAI 兼容接口（zhipu 或 vLLM）并带重试机制与状态追踪。
 不负责：提示词构建或命令执行。
 输入：系统/用户提示词与生成参数。
 输出：模型响应文本，供后续解析。
@@ -6,12 +6,25 @@
 */
 
 const OpenAI = require("openai");
+const { nowIso } = require("./utils");
 
 class LlmClient {
   constructor(config, logger) {
     this.config = config;
     this.logger = logger;
     this.client = this.createClient();
+    this.status = {
+      ok: true,
+      last_error: "",
+      last_status: null,
+      last_latency_ms: null,
+      last_success_at: null,
+      last_failure_at: null,
+      retrying: false,
+      last_retry_at: null,
+      last_retry_attempt: 0,
+      last_retry_error: ""
+    };
   }
 
   createClient() {
@@ -20,7 +33,7 @@ class LlmClient {
       throw new Error("VLLM_BASE_URL is empty");
     }
     const isLocalVllm = this.isLocalAddress(baseUrl);
-    const apiKey = this.config.vllmApiKey || (isLocalVllm ? "EMPTY" : "");
+    const apiKey = this.config.vllmApiKey || this.config.nvidiaApiKey || (isLocalVllm ? "EMPTY" : "");
 
     if (baseUrl !== this.config.vllmBaseUrl) {
       this.logger?.warn("llm.base_url.normalized", {
@@ -58,10 +71,19 @@ class LlmClient {
     return patterns.some((pattern) => pattern.test(hostname));
   }
 
-  async chat(systemPrompt, userPrompt) {
+  getStatus() {
+    return { ...this.status };
+  }
+
+  async chat(systemPrompt, userPrompt, options = {}) {
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const promptChars = (systemPrompt?.length || 0) + (userPrompt?.length || 0);
-    const model = this.config.vllmModel;
+    const model = options.model || this.config.vllmModel;
+
+    this.status.retrying = false;
+    this.status.last_retry_at = null;
+    this.status.last_retry_attempt = 0;
+    this.status.last_retry_error = "";
 
     this.logger?.info("llm.request.start", {
       requestId,
@@ -72,8 +94,15 @@ class LlmClient {
 
     try {
       const startAt = Date.now();
-      const response = await this.chatWithRetry(systemPrompt, userPrompt, requestId);
+      const response = await this.chatWithRetry(systemPrompt, userPrompt, requestId, model);
       const ms = Date.now() - startAt;
+
+      this.status.ok = true;
+      this.status.last_error = "";
+      this.status.last_status = 200;
+      this.status.last_latency_ms = ms;
+      this.status.last_success_at = nowIso();
+      this.status.retrying = false;
 
       this.logger?.info("llm.request.success", {
         requestId,
@@ -87,22 +116,31 @@ class LlmClient {
         usage: response.usage || null
       };
     } catch (err) {
+      const status = err?.status || err?.statusCode || null;
+      const errorMsg = err?.message || String(err);
+      this.status.ok = false;
+      this.status.last_error = errorMsg;
+      this.status.last_status = status;
+      this.status.last_failure_at = nowIso();
+      this.status.retrying = false;
+
       this.logger?.error("llm.request.failed", {
         requestId,
-        error: err.message || String(err)
+        status,
+        error: errorMsg
       });
       throw err;
     }
   }
 
-  async chatWithRetry(systemPrompt, userPrompt, requestId) {
+  async chatWithRetry(systemPrompt, userPrompt, requestId, model) {
     let attempt = 0;
     const maxAttempts = this.config.maxRetries;
 
     while (true) {
       try {
-        const response = await this.client.chat.completions.create({
-          model: this.config.vllmModel,
+        const payload = {
+          model: model || this.config.vllmModel,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt }
@@ -110,7 +148,13 @@ class LlmClient {
           temperature: this.config.temperature,
           top_p: this.config.topP,
           max_tokens: this.config.maxTokens
-        });
+        };
+
+        if (this.config.openaiExtraBody && Object.keys(this.config.openaiExtraBody).length > 0) {
+          payload.extra_body = this.config.openaiExtraBody;
+        }
+
+        const response = await this.client.chat.completions.create(payload);
 
         if (!response || !response.choices || !response.choices[0] || !response.choices[0].message) {
           throw new Error("Unexpected LLM response format");
@@ -125,6 +169,7 @@ class LlmClient {
         const isRetryable = this.isRetryableError(err);
 
         if (!isRetryable || attempt > maxAttempts) {
+          this.status.retrying = false;
           this.logger?.error("llm.request.failed", {
             requestId,
             attempt,
@@ -140,6 +185,11 @@ class LlmClient {
             + Math.random() * this.config.retryJitterSeconds
         );
 
+        this.status.retrying = true;
+        this.status.last_retry_at = nowIso();
+        this.status.last_retry_attempt = attempt;
+        this.status.last_retry_error = err.message || String(err);
+
         this.logger?.warn("llm.request.retry", {
           requestId,
           attempt,
@@ -154,11 +204,20 @@ class LlmClient {
 
   isRetryableError(err) {
     if (!err) return false;
-    const message = err.message || "";
+    const message = (err.message || "").toLowerCase();
     const status = err.status || err.statusCode || 0;
+    const code = String(err.code || "").toUpperCase();
 
-    const retryableStatus = [408, 429].includes(status) ||
-      (status >= 500 && status < 600);
+    const retryableStatus = status === 408 || status === 429 || (status >= 500 && status < 600);
+
+    const retryableCodes = [
+      "ECONNRESET",
+      "ETIMEDOUT",
+      "ECONNREFUSED",
+      "ENOTFOUND",
+      "EAI_AGAIN",
+      "EPIPE"
+    ].includes(code);
 
     const retryableKeywords = [
       "timeout",
@@ -166,12 +225,12 @@ class LlmClient {
       "try again",
       "overloaded",
       "temporary",
-      "ECONNRESET",
-      "ETIMEDOUT",
-      "ECONNREFUSED"
-    ].some((kw) => message.toLowerCase().includes(kw));
+      "connection",
+      "socket",
+      "network"
+    ].some((kw) => message.includes(kw));
 
-    return retryableStatus || retryableKeywords;
+    return retryableStatus || retryableCodes || retryableKeywords;
   }
 
   normalizeBaseUrl(raw) {
