@@ -141,9 +141,14 @@ function formatEntry(entry, id) {
     const agent = headerMatch ? headerMatch[2] : "";
     const round = headerMatch ? Number.parseInt(headerMatch[3], 10) : null;
     let topic = "";
+    let stage = "";
     let bodyLines = entry.lines.slice(1);
     if (bodyLines.length && /^Topic:\s*/.test(bodyLines[0])) {
       topic = bodyLines[0].replace(/^Topic:\s*/, "").trim();
+      bodyLines = bodyLines.slice(1);
+    }
+    if (bodyLines.length && /^Stage:\s*/.test(bodyLines[0])) {
+      stage = bodyLines[0].replace(/^Stage:\s*/, "").trim();
       bodyLines = bodyLines.slice(1);
     }
     const body = bodyLines.join("\n").trim();
@@ -154,6 +159,7 @@ function formatEntry(entry, id) {
       round,
       timestamp,
       topic,
+      stage,
       body
     };
   }

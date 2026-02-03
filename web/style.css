@@ -292,6 +292,14 @@ body {
   font-size: 13px;
 }
 
+.stage {
+  color: #fbbf24;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(251, 191, 36, 0.15);
+}
+
 .topic {
   color: var(--accent);
 }
