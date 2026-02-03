@@ -66,6 +66,7 @@
                 </template>
                 <template v-else>
                   <div class="entry-header">
+                    <span class="stage" v-if="entry.stage">{{ entry.stage }}</span>
                     <span class="agent" :class="entry.agent === 'A' ? 'agent-a' : 'agent-b'">
                       Agent {{ entry.agent || '-' }}
                     </span>

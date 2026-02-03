@@ -289,11 +289,11 @@ class DebateAgent {
     if (topicAfterFirst && topicAfterFirst !== roundTopic) {
       this.log.appendTopicChange(roundTopic, topicAfterFirst, firstAgent);
     }
-    this.appendAgentReply(firstAgent, agentFirstResult.reply, nextRound, topicAfterFirst);
+    this.appendAgentReply(firstAgent, agentFirstResult.reply, nextRound, topicAfterFirst, debateStep.title);
     if (topicAfterSecond && topicAfterSecond !== topicAfterFirst) {
       this.log.appendTopicChange(topicAfterFirst, topicAfterSecond, secondAgent);
     }
-    this.appendAgentReply(secondAgent, agentSecondResult.reply, nextRound, topicAfterSecond);
+    this.appendAgentReply(secondAgent, agentSecondResult.reply, nextRound, topicAfterSecond, debateStep.title);
 
     const resultsByAgent = {
       [agentFirstResult.agentKey]: agentFirstResult,
@@ -541,11 +541,12 @@ class DebateAgent {
     fs.appendFileSync(this.conversationPath, line, "utf8");
   }
 
-  appendAgentReply(agentKey, reply, round, topic) {
+  appendAgentReply(agentKey, reply, round, topic, stage) {
     const timestamp = formatUtc8();
     const header = `[${timestamp}] ${agentKey} (Round ${round})`;
     const body = reply ? reply.trim() : "(空)";
-    const content = `${header}\nTopic: ${topic || "(待定)"}\n${body}\n\n`;
+    const stageLine = stage ? `Stage: ${stage}\n` : "";
+    const content = `${header}\nTopic: ${topic || "(待定)"}\n${stageLine}${body}\n\n`;
     this.appendConversation(content);
     this.log.appendMessage(agentKey, body, round, topic, timestamp);
     this.lastReplyAt = nowIso();
