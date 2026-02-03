@@ -124,6 +124,10 @@ class DebateAgent {
     ensureDir(experienceDir);
     this.experiencePath = path.join(experienceDir, config.experienceFile || "experience.md");
 
+    const archiveDir = config.archiveDir || path.join(config.stateDir, "archives");
+    ensureDir(archiveDir);
+    this.archiveDir = archiveDir;
+
     this.round = 0;
     this.debateRound = 0;
     this.debateId = 1;
@@ -141,6 +145,28 @@ class DebateAgent {
     if (!fs.existsSync(this.identityBPath)) fs.writeFileSync(this.identityBPath, "", "utf8");
     if (!fs.existsSync(this.conversationPath)) fs.writeFileSync(this.conversationPath, "", "utf8");
     if (!fs.existsSync(this.experiencePath)) fs.writeFileSync(this.experiencePath, "", "utf8");
+  }
+
+  archiveCurrentDebate(debateId, topic) {
+    if (!fs.existsSync(this.conversationPath)) return;
+    try {
+      const conversationContent = fs.readFileSync(this.conversationPath, "utf8");
+      if (!conversationContent.trim()) return;
+
+      const timestamp = nowIso().replace(/[:.]/g, "-").slice(0, 19);
+      const safeTopic = (topic || "untitled").replace(/[^\w\u4e00-\u9fa5-]/g, "_").slice(0, 50);
+      const archiveFileName = `debate_${debateId}_${timestamp}_${safeTopic}.log`;
+      const archiveFilePath = path.join(this.archiveDir, archiveFileName);
+
+      fs.writeFileSync(archiveFilePath, conversationContent, "utf8");
+
+      fs.writeFileSync(this.conversationPath, "", "utf8");
+
+      this.logger?.info("debate.archived", { debateId, topic, archivePath: archiveFilePath });
+      this.log.appendSystemEvent("archive", `Debate ${debateId} archived to ${archiveFileName}`);
+    } catch (err) {
+      this.logger?.error("debate.archive.failed", { error: err.message });
+    }
   }
 
   loadState() {
@@ -192,6 +218,7 @@ class DebateAgent {
     const firstAgent = debateStep.order === "B" ? "B" : "A";
     const secondAgent = firstAgent === "A" ? "B" : "A";
 
+    const allowIdentityUpdateAlways = true;
     const agentFirstResult = await this.queryAgent({
       agentKey: firstAgent,
       identityPath: firstAgent === "A" ? this.identityAPath : this.identityBPath,
@@ -207,7 +234,7 @@ class DebateAgent {
       role: debateStep.roles[firstAgent],
       task: debateStep.tasks[firstAgent],
       speakerOrder: "first",
-      allowIdentityUpdate,
+      allowIdentityUpdate: allowIdentityUpdateAlways,
       isDebateStart,
       isDebateEnd,
       experience: this.readExperience(),
@@ -243,7 +270,7 @@ class DebateAgent {
       role: debateStep.roles[secondAgent],
       task: debateStep.tasks[secondAgent],
       speakerOrder: "second",
-      allowIdentityUpdate,
+      allowIdentityUpdate: allowIdentityUpdateAlways,
       isDebateStart,
       isDebateEnd,
       experience: this.readExperience(),
@@ -273,10 +300,8 @@ class DebateAgent {
       [agentSecondResult.agentKey]: agentSecondResult
     };
 
-    if (allowIdentityUpdate) {
-      this.applyIdentityUpdate("A", resultsByAgent.A ? resultsByAgent.A.identityUpdate : []);
-      this.applyIdentityUpdate("B", resultsByAgent.B ? resultsByAgent.B.identityUpdate : []);
-    }
+    this.applyIdentityUpdate("A", resultsByAgent.A ? resultsByAgent.A.planUpdate : []);
+    this.applyIdentityUpdate("B", resultsByAgent.B ? resultsByAgent.B.planUpdate : []);
 
     this.round = nextRound;
     const resolvedTopic = topicAfterSecond || topicAfterFirst || roundTopic;
@@ -379,14 +404,14 @@ class DebateAgent {
 
     const parsed = this.parseAgentResponse(rawResponse);
     const reply = parsed.reply || (llmError ? `(API error: ${truncate(llmError, 120)})` : "(无回复)");
-    const identityUpdate = allowIdentityUpdate ? parsed.identityUpdate : [];
+    const planUpdate = allowIdentityUpdate ? parsed.planUpdate : [];
     const experienceUpdate = parsed.experienceUpdate || [];
 
     return {
       agentKey,
       reply,
       topic: parsed.topic || topic || "",
-      identityUpdate,
+      planUpdate,
       experienceUpdate,
       raw: rawResponse,
       error: llmError
@@ -396,21 +421,21 @@ class DebateAgent {
   parseAgentResponse(raw) {
     const text = String(raw || "").trim();
     if (!text) {
-      return { reply: "", topic: "", identityUpdate: [], experienceUpdate: [] };
+      return { reply: "", topic: "", planUpdate: [], experienceUpdate: [] };
     }
 
     const json = safeJsonExtract(text);
     if (!json || typeof json !== "object") {
-      return { reply: text, topic: "", identityUpdate: [], experienceUpdate: [] };
+      return { reply: text, topic: "", planUpdate: [], experienceUpdate: [] };
     }
 
     const reply = String(json.reply || json.response || "").trim();
     const topic = String(json.topic || "").trim();
-    const update = json.identity_update || json.identityUpdate || [];
-    const identityUpdate = this.normalizeUpdateList(update);
+    const update = json.plan_update || json.planUpdate || json.identity_update || json.identityUpdate || [];
+    const planUpdate = this.normalizeUpdateList(update);
     const expUpdate = json.experience_update || json.experienceUpdate || [];
     const experienceUpdate = this.normalizeList(expUpdate);
-    return { reply, topic, identityUpdate, experienceUpdate };
+    return { reply, topic, planUpdate, experienceUpdate };
   }
 
   normalizeList(value) {

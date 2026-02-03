@@ -60,8 +60,8 @@ function buildDebateFlow(freeRounds) {
         B: "进行立论陈词，明确反方立场并指出正方核心漏洞。"
       },
       lengthGuide: {
-        A: makeGuide(280, 420, "3分钟陈词"),
-        B: makeGuide(280, 420, "3分钟陈词")
+        A: makeGuide(850, 950, "3分钟陈词"),
+        B: makeGuide(850, 950, "3分钟陈词")
       }
     },
     {
@@ -75,8 +75,8 @@ function buildDebateFlow(freeRounds) {
         B: "直接回答问题，给出清晰理由或证据。"
       },
       lengthGuide: {
-        A: makeGuide(30, 60, "提问30秒"),
-        B: makeGuide(120, 180, "回答1分钟")
+        A: makeGuide(140, 160, "提问30秒"),
+        B: makeGuide(280, 320, "回答1分钟")
       }
     },
     {
@@ -90,8 +90,8 @@ function buildDebateFlow(freeRounds) {
         B: "提出1个尖锐问题，聚焦对方逻辑漏洞。"
       },
       lengthGuide: {
-        A: makeGuide(120, 180, "回答1分钟"),
-        B: makeGuide(30, 60, "提问30秒")
+        A: makeGuide(280, 320, "回答1分钟"),
+        B: makeGuide(140, 160, "提问30秒")
       }
     },
     {
@@ -105,8 +105,8 @@ function buildDebateFlow(freeRounds) {
         B: "直接回答问题，避免回避或跑题。"
       },
       lengthGuide: {
-        A: makeGuide(30, 60, "提问30秒"),
-        B: makeGuide(120, 180, "回答1分钟")
+        A: makeGuide(140, 160, "提问30秒"),
+        B: makeGuide(280, 320, "回答1分钟")
       }
     },
     {
@@ -120,8 +120,8 @@ function buildDebateFlow(freeRounds) {
         B: "提出1个尖锐问题，推动对方自证。"
       },
       lengthGuide: {
-        A: makeGuide(120, 180, "回答1分钟"),
-        B: makeGuide(30, 60, "提问30秒")
+        A: makeGuide(280, 320, "回答1分钟"),
+        B: makeGuide(140, 160, "提问30秒")
       }
     },
     {
@@ -135,8 +135,8 @@ function buildDebateFlow(freeRounds) {
         B: "针对攻辩态势总结己方优势与对方漏洞，不背稿。"
       },
       lengthGuide: {
-        A: makeGuide(180, 260, "2分钟小结"),
-        B: makeGuide(180, 260, "2分钟小结")
+        A: makeGuide(550, 650, "2分钟小结"),
+        B: makeGuide(550, 650, "2分钟小结")
       }
     }
   ];
@@ -153,8 +153,8 @@ function buildDebateFlow(freeRounds) {
         B: "回应对方最新观点并推进己方核心论点。"
       },
       lengthGuide: {
-        A: makeGuide(160, 240, "自由辩论单轮"),
-        B: makeGuide(160, 240, "自由辩论单轮")
+        A: makeGuide(280, 320, "自由辩论单轮"),
+        B: makeGuide(280, 320, "自由辩论单轮")
       }
     });
   }
@@ -170,8 +170,8 @@ function buildDebateFlow(freeRounds) {
       B: "最终总结，回扣核心论点与全场关键对抗点。"
     },
     lengthGuide: {
-      A: makeGuide(260, 380, "3分钟总结"),
-      B: makeGuide(260, 380, "3分钟总结")
+      A: makeGuide(850, 950, "3分钟总结"),
+      B: makeGuide(850, 950, "3分钟总结")
     }
   });
 

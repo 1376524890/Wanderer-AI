@@ -27,7 +27,10 @@
           <section class="panel conversation">
             <div class="panel-header">
               <div>
-                <div class="panel-title">对话流</div>
+                <div class="panel-title">
+                  对话流
+                  <span class="current-topic-badge" v-if="currentTopic">{{ currentTopic }}</span>
+                </div>
                 <div class="panel-sub">实时捕捉最新辩论内容，支持自动翻页与搜索</div>
               </div>
               <div class="panel-actions">
@@ -151,12 +154,44 @@
 
               <div class="identity-grid">
                 <div class="card identity">
-                  <div class="label">Agent A Identity</div>
+                  <div class="label">Agent A Plan</div>
                   <pre>{{ identities.identityA || "(空)" }}</pre>
                 </div>
                 <div class="card identity">
-                  <div class="label">Agent B Identity</div>
+                  <div class="label">Agent B Plan</div>
                   <pre>{{ identities.identityB || "(空)" }}</pre>
+                </div>
+              </div>
+
+              <div class="card experience">
+                <div class="label">Experience (经验总结)</div>
+                <pre>{{ experience || "(空)" }}</pre>
+              </div>
+
+              <div class="archive-section">
+                <div class="label">历史主题归档</div>
+                <div class="archive-list">
+                  <div 
+                    class="archive-item" 
+                    v-if="status.topic && status.topic !== currentTopic"
+                    @click="switchTopic(status.topic)"
+                  >
+                    <span class="archive-topic">{{ status.topic || '当前主题' }}</span>
+                    <span class="archive-tag current">当前</span>
+                  </div>
+                  <div 
+                    class="archive-item" 
+                    v-for="archive in archivedTopics" 
+                    :key="archive.topic"
+                    :class="{ active: archive.topic === currentTopic }"
+                    @click="switchTopic(archive.topic)"
+                  >
+                    <span class="archive-topic">{{ archive.topic }}</span>
+                    <span class="archive-count">{{ archive.entries.length }} 条</span>
+                  </div>
+                  <div class="archive-empty" v-if="!archivedTopics.length && (!status.topic || status.topic === currentTopic)">
+                    暂无归档
+                  </div>
                 </div>
               </div>
             </div>

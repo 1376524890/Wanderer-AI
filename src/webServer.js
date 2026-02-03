@@ -23,6 +23,8 @@ const statusPath = path.join(stateDir, "status.json");
 const conversationPath = path.join(stateDir, "conversation.log");
 const identityAPath = path.join(identityDir, config.identityAFile || "identity_a.md");
 const identityBPath = path.join(identityDir, config.identityBFile || "identity_b.md");
+const experienceDir = config.experienceDir || stateDir;
+const experiencePath = path.join(experienceDir, config.experienceFile || "experience.md");
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -221,6 +223,12 @@ function loadIdentities() {
   };
 }
 
+function loadExperience() {
+  return {
+    experience: readTextSafe(experiencePath).trim()
+  };
+}
+
 function serveStatic(req, res, pathname) {
   let filePath = path.normalize(path.join(STATIC_DIR, pathname));
   if (!filePath.startsWith(STATIC_DIR)) {
@@ -270,6 +278,7 @@ function handleStream(req, res, query) {
     lastEntryId: 0,
     lastStatusHash: "",
     lastIdentityHash: "",
+    lastExperienceHash: "",
     lastHeartbeat: Date.now()
   };
 
@@ -284,6 +293,7 @@ function handleStream(req, res, query) {
   sendEvent(res, "snapshot", {
     status: loadStatus(),
     identities: loadIdentities(),
+    experience: loadExperience(),
     entries: snapshotEntries.entries,
     lastEntryId: snapshotEntries.lastId,
     hasMore: snapshotEntries.hasMore
@@ -292,6 +302,7 @@ function handleStream(req, res, query) {
   client.lastEntryId = snapshotEntries.lastId;
   client.lastStatusHash = JSON.stringify(loadStatus());
   client.lastIdentityHash = JSON.stringify(loadIdentities());
+  client.lastExperienceHash = JSON.stringify(loadExperience());
 
   req.on("close", () => {
     clients.delete(client);
@@ -302,9 +313,11 @@ function broadcastUpdates() {
   if (clients.size === 0) return;
   const status = loadStatus();
   const identities = loadIdentities();
+  const experience = loadExperience();
   const entries = loadConversation();
   const statusHash = JSON.stringify(status);
   const identityHash = JSON.stringify(identities);
+  const experienceHash = JSON.stringify(experience);
   const now = Date.now();
 
   for (const client of clients) {
@@ -317,6 +330,11 @@ function broadcastUpdates() {
     if (identityHash !== client.lastIdentityHash) {
       sendEvent(res, "identities", identities);
       client.lastIdentityHash = identityHash;
+    }
+
+    if (experienceHash !== client.lastExperienceHash) {
+      sendEvent(res, "experience", experience);
+      client.lastExperienceHash = experienceHash;
     }
 
     if (entries.length < client.lastEntryId) {
@@ -354,6 +372,9 @@ const server = http.createServer((req, res) => {
     }
     if (pathname === "/api/identities") {
       return sendJson(res, 200, loadIdentities());
+    }
+    if (pathname === "/api/experience") {
+      return sendJson(res, 200, loadExperience());
     }
     if (pathname === "/api/conversation") {
       const before = urlObj.searchParams.get("before");

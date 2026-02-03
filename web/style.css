@@ -106,7 +106,7 @@ body {
 
 .grid {
   display: grid;
-  grid-template-columns: 1.6fr 1fr;
+  grid-template-columns: 65% 35%;
   gap: 20px;
   flex: 1;
   min-height: 0;
@@ -142,6 +142,18 @@ body {
 .panel-title {
   font-size: 16px;
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.current-topic-badge {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(110, 168, 254, 0.2), rgba(139, 92, 246, 0.2));
+  color: var(--accent);
+  border: 1px solid rgba(110, 168, 254, 0.3);
 }
 
 .panel-sub {
@@ -347,4 +359,66 @@ body {
   .grid {
     grid-template-columns: 1fr;
   }
+}
+
+.archive-section {
+  padding: 16px 20px 20px;
+}
+
+.archive-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.archive-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel-strong);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.archive-item:hover {
+  background: rgba(110, 168, 254, 0.15);
+  border-color: rgba(110, 168, 254, 0.4);
+}
+
+.archive-item.active {
+  background: rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.4);
+}
+
+.archive-topic {
+  font-size: 13px;
+  color: var(--text);
+  flex: 1;
+  word-break: break-word;
+}
+
+.archive-count,
+.archive-tag {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.2);
+}
+
+.archive-tag.current {
+  background: rgba(34, 197, 94, 0.2);
+  color: var(--success);
+}
+
+.archive-empty {
+  text-align: center;
+  padding: 20px;
+  color: var(--muted);
+  font-size: 12px;
 }

@@ -3,8 +3,11 @@ const { createApp, ref, computed, nextTick, onMounted } = Vue;
 createApp({
   setup() {
     const entries = ref([]);
+    const archivedTopics = ref([]);
+    const currentTopic = ref("");
     const status = ref({});
     const identities = ref({ identityA: "", identityB: "" });
+    const experience = ref("");
     const connection = ref({ state: "connecting", lastEventAt: null });
     const autoScroll = ref(true);
     const autoPage = ref(true);
@@ -51,9 +54,12 @@ createApp({
     });
 
     const filteredEntries = computed(() => {
+      let result = entries.value.filter(entry => entry.topic === currentTopic.value);
+      
       const keyword = filterText.value.trim().toLowerCase();
-      if (!keyword) return entries.value;
-      return entries.value.filter((entry) => {
+      if (!keyword) return result;
+      
+      return result.filter((entry) => {
         const haystack = [
           entry.title,
           entry.topic,
@@ -123,11 +129,27 @@ createApp({
     function applyEntries(newEntries, append = true) {
       if (!Array.isArray(newEntries) || !newEntries.length) return;
       const shouldStick = autoScroll.value && isAtBottom();
-      if (append) {
+      
+      const firstEntry = newEntries[0];
+      if (firstEntry.topic && firstEntry.topic !== currentTopic.value) {
+        if (currentTopic.value && entries.value.length > 0) {
+          const topicEntries = entries.value.filter(e => e.topic === currentTopic.value);
+          if (topicEntries.length > 0) {
+            archivedTopics.value.push({
+              topic: currentTopic.value,
+              entries: topicEntries,
+              archivedAt: new Date().toISOString()
+            });
+          }
+        }
+        currentTopic.value = firstEntry.topic;
+        entries.value = newEntries.filter(e => e.topic === currentTopic.value);
+      } else if (append) {
         entries.value = [...entries.value, ...newEntries];
       } else {
         entries.value = newEntries;
       }
+      
       nextTick(() => {
         if (shouldStick) scrollToBottom();
       });
@@ -155,7 +177,28 @@ createApp({
           const data = JSON.parse(evt.data || "{}");
           status.value = data.status || {};
           identities.value = data.identities || { identityA: "", identityB: "" };
-          entries.value = Array.isArray(data.entries) ? data.entries : [];
+          experience.value = data.experience?.experience || "";
+          
+          const snapshotEntries = Array.isArray(data.entries) ? data.entries : [];
+          const snapshotTopic = snapshotEntries.length > 0 ? snapshotEntries[snapshotEntries.length - 1].topic : "";
+          
+          if (snapshotTopic && snapshotTopic !== currentTopic.value) {
+            if (currentTopic.value && entries.value.length > 0) {
+              const topicEntries = entries.value.filter(e => e.topic === currentTopic.value);
+              if (topicEntries.length > 0) {
+                archivedTopics.value.push({
+                  topic: currentTopic.value,
+                  entries: topicEntries,
+                  archivedAt: new Date().toISOString()
+                });
+              }
+            }
+            currentTopic.value = snapshotTopic;
+            entries.value = snapshotEntries.filter(e => e.topic === currentTopic.value);
+          } else {
+            entries.value = snapshotEntries.filter(e => !currentTopic.value || e.topic === currentTopic.value);
+          }
+          
           lastEntryId = data.lastEntryId || entries.value.length;
           hasMore.value = Boolean(data.hasMore);
           nextTick(scrollToBottom);
@@ -166,7 +209,21 @@ createApp({
 
       eventSource.addEventListener("status", (evt) => {
         try {
-          status.value = JSON.parse(evt.data || "{}");
+          const newStatus = JSON.parse(evt.data || "{}");
+          status.value = newStatus;
+          
+          if (newStatus.topic && newStatus.topic !== currentTopic.value && currentTopic.value) {
+            const topicEntries = entries.value.filter(e => e.topic === currentTopic.value);
+            if (topicEntries.length > 0) {
+              archivedTopics.value.push({
+                topic: currentTopic.value,
+                entries: topicEntries,
+                archivedAt: new Date().toISOString()
+              });
+            }
+            currentTopic.value = newStatus.topic;
+            entries.value = entries.value.filter(e => e.topic === currentTopic.value);
+          }
         } catch (err) {
           // ignore
         }
@@ -175,6 +232,14 @@ createApp({
       eventSource.addEventListener("identities", (evt) => {
         try {
           identities.value = JSON.parse(evt.data || "{}");
+        } catch (err) {
+          // ignore
+        }
+      });
+
+      eventSource.addEventListener("experience", (evt) => {
+        try {
+          experience.value = JSON.parse(evt.data || "{}").experience || "";
         } catch (err) {
           // ignore
         }
@@ -224,14 +289,56 @@ createApp({
       return String(num);
     }
 
+    function switchTopic(topic) {
+      if (topic === currentTopic.value) return;
+      
+      const existing = archivedTopics.value.find(a => a.topic === topic);
+      if (existing) {
+        if (currentTopic.value) {
+          const currentEntries = entries.value.filter(e => e.topic === currentTopic.value);
+          const archived = archivedTopics.value.findIndex(a => a.topic === currentTopic.value);
+          if (archived >= 0) {
+            archivedTopics.value[archived].entries = currentEntries;
+          } else {
+            archivedTopics.value.push({
+              topic: currentTopic.value,
+              entries: currentEntries,
+              archivedAt: new Date().toISOString()
+            });
+          }
+        }
+        currentTopic.value = topic;
+        entries.value = existing.entries;
+      } else if (status.value.topic === topic) {
+        if (currentTopic.value) {
+          const currentEntries = entries.value.filter(e => e.topic === currentTopic.value);
+          const archived = archivedTopics.value.findIndex(a => a.topic === currentTopic.value);
+          if (archived >= 0) {
+            archivedTopics.value[archived].entries = currentEntries;
+          } else {
+            archivedTopics.value.push({
+              topic: currentTopic.value,
+              entries: currentEntries,
+              archivedAt: new Date().toISOString()
+            });
+          }
+        }
+        currentTopic.value = topic;
+        entries.value = entries.value.filter(e => e.topic === topic);
+      }
+    }
+
     onMounted(() => {
       connectStream();
     });
 
     return {
       entries,
+      archivedTopics,
+      currentTopic,
       status,
       identities,
+      experience,
       connection,
       autoScroll,
       autoPage,
@@ -249,7 +356,8 @@ createApp({
       loadEarlier,
       onScroll,
       refreshOnce,
-      formatNumber
+      formatNumber,
+      switchTopic
     };
   }
 }).mount("#app");
