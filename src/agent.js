@@ -132,6 +132,7 @@ class DebateAgent {
     this.debateRound = 0;
     this.debateId = 1;
     this.topic = "";
+    this.topicHistory = [];
     this.lastReplyAt = null;
     this.tokenStats = this.loadTokenStats();
     this.debateFlow = buildDebateFlow(config.freeDebateRounds);
@@ -178,6 +179,7 @@ class DebateAgent {
       this.debateRound = Number.isFinite(data.debate_round) ? data.debate_round : this.debateRound;
       this.debateId = Number.isFinite(data.debate_id) ? data.debate_id : this.debateId;
       this.topic = typeof data.topic === "string" ? data.topic : this.topic;
+      this.topicHistory = Array.isArray(data.topic_history) ? data.topic_history : [];
       this.lastReplyAt = data.last_reply_at || this.lastReplyAt;
     } catch (err) {
       // ignore
@@ -211,9 +213,13 @@ class DebateAgent {
     const isDebateStart = nextDebateRound === 1;
     const isDebateEnd = nextDebateRound === debateTotalRounds;
     const allowIdentityUpdate = true;
-    const roundTopic = this.topic || "";
 
     const conversationContext = readTail(this.conversationPath, this.config.contextMaxChars);
+
+    let roundTopic = this.topic || "";
+    if (!isDebateStart && this.round > 0) {
+      roundTopic = await this.generateNewTopic(conversationContext, roundTopic, nextRound);
+    }
 
     const firstAgent = debateStep.order === "B" ? "B" : "A";
     const secondAgent = firstAgent === "A" ? "B" : "A";
@@ -326,6 +332,7 @@ class DebateAgent {
       ]);
       this.resetIdentityFiles();
       this.topic = "";
+      this.topicHistory = [];
       this.log.appendSystemEvent("debate_end", `Debate ${currentDebateId} completed`);
       this.debateId += 1;
     }
@@ -337,6 +344,36 @@ class DebateAgent {
     const trimmed = String(proposed || "").trim();
     if (!trimmed) return current;
     return trimmed;
+  }
+
+  async generateNewTopic(conversation, currentTopic, round) {
+    if (!conversation || conversation.trim() === "(无)") return currentTopic;
+    
+    const systemPrompt = "你是一个辩论题目生成助手。分析给定的对话内容，找出核心分歧点，并基于此生成一个新的辩论题目。要求：1）题目必须可辩论，不能是事实陈述；2）题目不能与历史题目相同；3）题目应该引发对立观点；4）题目简洁明确，10-30字。输出严格JSON格式：{\"disagreement\":\"核心分歧点\",\"new_topic\":\"新辩论题目\"}";
+    
+    const userPrompt = [
+      `当前轮次：${round}`,
+      `当前题目：${currentTopic || "(未设定)"}`,
+      "【对话内容】",
+      conversation
+    ].join("\n");
+
+    try {
+      const result = await this.llm.chat(systemPrompt, userPrompt, { model: this.config.vllmModel });
+      const json = safeJsonExtract(result.content || "");
+      if (json && json.new_topic && json.new_topic.trim()) {
+        const newTopic = json.new_topic.trim();
+        if (!this.topicHistory.includes(newTopic)) {
+          this.topicHistory.push(newTopic);
+          this.log.appendSystemEvent("topic_generated", `Round ${round}: ${newTopic} (分歧点: ${json.disagreement || "未明确"})`);
+          return newTopic;
+        }
+      }
+    } catch (err) {
+      this.logger?.error("topic.generate.failed", { error: err?.message || String(err) });
+    }
+    
+    return currentTopic;
   }
 
   async queryAgent({
@@ -565,6 +602,7 @@ class DebateAgent {
       debate_stage_length: stageMeta.lengthGuide,
       debate_total_rounds: this.debateFlow.length,
       topic: this.topic,
+      topic_history: this.topicHistory.slice(-50),
       last_reply_at: this.lastReplyAt || nowIso(),
       sleep_seconds: sleepSeconds,
       token_stats: this.tokenStats,
