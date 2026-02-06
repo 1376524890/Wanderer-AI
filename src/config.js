@@ -66,7 +66,6 @@ function loadConfig() {
     experienceFile: process.env.EXPERIENCE_FILE || "experience.md",
     experienceMaxChars: parseIntValue(process.env.EXPERIENCE_MAX_CHARS, 5000),
     freeDebateRounds: parseIntValue(process.env.FREE_DEBATE_ROUNDS, 4),
-    timeControlEnabled: parseBool(process.env.TIME_CONTROL_ENABLED, true),
     journalDir,
     stateDir,
     logLevel: process.env.LOG_LEVEL || "INFO",

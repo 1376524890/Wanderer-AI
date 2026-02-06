@@ -41,7 +41,6 @@ function buildDebatePrompts({
   isDebateEnd,
   conversation,
   evaluation,
-  timeLimit,
   myScores,
   opponentScores
 }) {
@@ -54,7 +53,6 @@ function buildDebatePrompts({
   const debateStartText = isDebateStart ? "是" : "否";
   const debateEndText = isDebateEnd ? "是" : "否";
   const lengthGuideText = lengthGuide ? formatLengthGuide(lengthGuide) : "按阶段规则控制";
-  const timeLimitText = timeLimit ? `⏱️ 时间限制：${timeLimit}秒` : "";
 
   let evaluationSection = "";
   if (evaluation) {
@@ -108,7 +106,6 @@ ${opponentHighlights.map(h => `- ${h}`).join("\n")}
     `阶段标识：${stageKey || "-"}`,
     `阶段：${stageTitle || "-"}`,
     `阶段规则：${stageRule || "-"}`,
-    timeLimitText,
     `字数建议：${lengthGuideText}`,
     `你的角色：${role || "-"}`,
     `发言顺序：${orderText}`,

@@ -11,7 +11,7 @@ const path = require("path");
 const { DebateLog } = require("./journal");
 const { LlmClient } = require("./llmClient");
 const { buildDebatePrompts } = require("./prompts");
-const { buildDebateFlow, formatStageLengthGuide, getStageLengthGuide, getStageDuration } = require("./workflow");
+const { buildDebateFlow, formatStageLengthGuide, getStageLengthGuide, getStageMaxChars } = require("./workflow");
 const { DebateJudge } = require("./judge");
 const { ensureDir, nowIso, readTail, truncate, safeJsonExtract, formatUtc8 } = require("./utils");
 
@@ -154,7 +154,6 @@ class DebateAgent {
     this.lastReplyAt = null;
     this.tokenStats = this.loadTokenStats();
     this.debateFlow = buildDebateFlow(config.freeDebateRounds);
-    this.timeControlEnabled = config.timeControlEnabled !== false;
 
     this.ensureIdentityFiles();
     this.loadState();
@@ -253,8 +252,8 @@ class DebateAgent {
 
     const allowIdentityUpdateAlways = true;
 
-    const firstAgentTimeLimit = getStageDuration(debateStep, firstAgent);
-    const secondAgentTimeLimit = getStageDuration(debateStep, secondAgent);
+    const firstAgentMaxChars = getStageMaxChars(debateStep, firstAgent);
+    const secondAgentMaxChars = getStageMaxChars(debateStep, secondAgent);
 
     const agentFirstResult = await this.queryAgent({
       agentKey: firstAgent,
@@ -277,7 +276,7 @@ class DebateAgent {
       experience: this.readExperience(),
       conversation: conversationContext,
       evaluation: this.currentEvaluation,
-      timeLimit: firstAgentTimeLimit,
+      maxChars: firstAgentMaxChars,
       myScores: this.currentScores[firstAgent],
       opponentScores: this.currentScores[secondAgent]
     });
@@ -317,7 +316,7 @@ class DebateAgent {
       experience: this.readExperience(),
       conversation: conversationAfterFirst,
       evaluation: this.currentEvaluation,
-      timeLimit: secondAgentTimeLimit,
+      maxChars: secondAgentMaxChars,
       myScores: this.currentScores[secondAgent],
       opponentScores: this.currentScores[firstAgent]
     });
@@ -523,7 +522,7 @@ class DebateAgent {
     experience,
     conversation,
     evaluation,
-    timeLimit,
+    maxChars,
     myScores,
     opponentScores
   }) {
@@ -549,7 +548,6 @@ class DebateAgent {
       isDebateEnd,
       conversation,
       evaluation,
-      timeLimit,
       myScores,
       opponentScores
     });
@@ -560,21 +558,9 @@ class DebateAgent {
     const model = this.getModelForAgent(agentKey);
 
     try {
-      let llmPromise = this.llm.chat(systemPrompt, userPrompt, { model });
-      
-      if (this.timeControlEnabled && timeLimit && timeLimit > 0) {
-        const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error(`Time limit exceeded: ${timeLimit}s`)), timeLimit * 1000);
-        });
-        
-        const result = await Promise.race([llmPromise, timeoutPromise]);
-        rawResponse = result.content || "";
-        llmUsage = result.usage || null;
-      } else {
-        const result = await llmPromise;
-        rawResponse = result.content || "";
-        llmUsage = result.usage || null;
-      }
+      const result = await this.llm.chat(systemPrompt, userPrompt, { model });
+      rawResponse = result.content || "";
+      llmUsage = result.usage || null;
     } catch (err) {
       llmError = err && err.message ? err.message : String(err);
       this.logger?.error("debate.llm.failed", { agent: agentKey, error: llmError });
@@ -586,7 +572,12 @@ class DebateAgent {
     }
 
     const parsed = this.parseAgentResponse(rawResponse);
-    const reply = parsed.reply || (llmError ? `(API error: ${truncate(llmError, 120)})` : "(无回复)");
+    let reply = parsed.reply || (llmError ? `(API error: ${truncate(llmError, 120)})` : "(无回复)");
+    
+    if (maxChars && maxChars > 0 && reply.length > maxChars) {
+      reply = reply.slice(0, maxChars);
+    }
+    
     const planUpdate = allowIdentityUpdate ? parsed.planUpdate : [];
     const experienceUpdate = parsed.experienceUpdate || [];
 
