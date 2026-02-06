@@ -341,20 +341,28 @@ class DebateAgent {
       round: nextRound
     });
 
-    this.currentEvaluation = evaluation;
-    this.currentScores = {
-      A: {
-        average: evaluation.averages.A,
-        details: evaluation.scores.A
-      },
-      B: {
-        average: evaluation.averages.B,
-        details: evaluation.scores.B
-      }
-    };
-    this.cumulativeScores.A += evaluation.averages.A;
-    this.cumulativeScores.B += evaluation.averages.B;
-    this.evaluatedRounds += 1;
+    if (evaluation) {
+      this.currentEvaluation = evaluation;
+      this.currentScores = {
+        A: {
+          average: evaluation.averages.A,
+          details: evaluation.scores.A
+        },
+        B: {
+          average: evaluation.averages.B,
+          details: evaluation.scores.B
+        }
+      };
+      this.cumulativeScores.A += evaluation.averages.A;
+      this.cumulativeScores.B += evaluation.averages.B;
+      this.evaluatedRounds += 1;
+    } else {
+      this.logger?.warn("agent.round.skip_score", {
+        round: nextRound,
+        reason: "评委LLM不可用，跳过本轮评分"
+      });
+      this.log.appendSystemEvent("round_score_skipped", "评委LLM不可用，跳过本轮评分");
+    }
 
     this.log.appendRoundStart(nextRound, roundTopic);
     this.appendConversation(`\n=== Round ${nextRound} | Topic: ${roundTopic || "(待确定)"} ===\n`);
@@ -405,7 +413,15 @@ class DebateAgent {
     if (isDebateEnd) {
       const debateHistory = this.readFullConversation();
       const finalEvaluation = await this.judge.evaluateDebate(debateHistory, resolvedTopic);
-      this.log.appendFinalEvaluation(currentDebateId, finalEvaluation);
+      if (finalEvaluation) {
+        this.log.appendFinalEvaluation(currentDebateId, finalEvaluation);
+      } else {
+        this.logger?.warn("agent.debate.skip_score", {
+          debate_id: currentDebateId,
+          reason: "评委LLM不可用，跳过整场评分"
+        });
+        this.log.appendSystemEvent("debate_score_skipped", "评委LLM不可用，跳过整场评分");
+      }
 
       this.appendExperienceUpdate(currentDebateId, resolvedTopic, [
         { agentKey: "A", updates: lastTurn.agentA.experienceUpdate },
@@ -600,16 +616,21 @@ class DebateAgent {
 
     const json = safeJsonExtract(text);
     if (!json || typeof json !== "object") {
-      return { reply: text, topic: "", planUpdate: [], experienceUpdate: [] };
+      return { reply: this.stripThinkTags(text), topic: "", planUpdate: [], experienceUpdate: [] };
     }
 
-    const reply = String(json.reply || json.response || "").trim();
+    const reply = this.stripThinkTags(String(json.reply || json.response || ""));
     const topic = String(json.topic || "").trim();
     const update = json.plan_update || json.planUpdate || json.identity_update || json.identityUpdate || [];
     const planUpdate = this.normalizeUpdateList(update);
     const expUpdate = json.experience_update || json.experienceUpdate || [];
     const experienceUpdate = this.normalizeList(expUpdate);
     return { reply, topic, planUpdate, experienceUpdate };
+  }
+
+  stripThinkTags(text) {
+    if (!text || typeof text !== 'string') return '';
+    return text.replace(/[\s\S]*?<\/think>/gi, '').trim();
   }
 
   normalizeList(value) {

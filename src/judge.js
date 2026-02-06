@@ -13,6 +13,31 @@ class DebateJudge {
     this.llmClient = new this.llm(config, logger);
   }
 
+  async withRetry(fn, maxRetries = 12, baseDelay = 2000) {
+    let lastError;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastError = err;
+        if (attempt < maxRetries) {
+          const delay = Math.min(
+            90000,
+            baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1500
+          );
+          this.logger?.warn("judge.retry", {
+            attempt,
+            maxRetries,
+            delay: Math.round(delay),
+            error: err?.message || String(err)
+          });
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+    throw lastError;
+  }
+
   async evaluateRound(debateContext) {
     const { topic, stage, replyA, replyB, speakerA, speakerB, round, stageKey, stageRule } = debateContext;
     
@@ -86,33 +111,35 @@ ${replyB || "(无发言)"}
 }`;
 
     try {
-      const result = await this.llmClient.chat(systemPrompt, userPrompt, { 
-        model: this.config.vllmModel,
-        temperature: 0.3,
-        maxTokens: 2048
-      });
-      
-      const jsonMatch = result.content.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error("无法解析评委JSON响应");
-      }
-      
-      const evaluation = JSON.parse(jsonMatch[0]);
-      
+      const evaluation = await this.withRetry(async () => {
+        const result = await this.llmClient.chat(systemPrompt, userPrompt, {
+          model: this.config.vllmModel,
+          temperature: 0.3,
+          maxTokens: 2048
+        });
+
+        const jsonMatch = result.content.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+          throw new Error("无法解析评委JSON响应");
+        }
+
+        return JSON.parse(jsonMatch[0]);
+      }, this.config.maxRetries, this.config.retryBaseSeconds * 1000);
+
       this.logger?.info("judge.round.evaluation", {
         round,
         winner: evaluation.round_winner,
         avgA: evaluation.averages.A,
         avgB: evaluation.averages.B
       });
-      
+
       return evaluation;
     } catch (err) {
-      this.logger?.error("judge.round.failed", { 
-        round, 
-        error: err?.message || String(err) 
+      this.logger?.error("judge.round.failed", {
+        round,
+        error: err?.message || String(err)
       });
-      return this.getDefaultEvaluation();
+      return null;
     }
   }
 
@@ -186,31 +213,33 @@ ${debateHistory}
 }`;
 
     try {
-      const result = await this.llmClient.chat(systemPrompt, userPrompt, {
-        model: this.config.vllmModel,
-        temperature: 0.3,
-        maxTokens: 3072
-      });
-      
-      const jsonMatch = result.content.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error("无法解析总评委JSON响应");
-      }
-      
-      const finalEvaluation = JSON.parse(jsonMatch[0]);
-      
+      const finalEvaluation = await this.withRetry(async () => {
+        const result = await this.llmClient.chat(systemPrompt, userPrompt, {
+          model: this.config.vllmModel,
+          temperature: 0.3,
+          maxTokens: 3072
+        });
+
+        const jsonMatch = result.content.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+          throw new Error("无法解析总评委JSON响应");
+        }
+
+        return JSON.parse(jsonMatch[0]);
+      }, this.config.maxRetries, this.config.retryBaseSeconds * 1000);
+
       this.logger?.info("judge.debate.evaluation", {
         winner: finalEvaluation.winner,
         scoreA: finalEvaluation.final_scores.A,
         scoreB: finalEvaluation.final_scores.B
       });
-      
+
       return finalEvaluation;
     } catch (err) {
-      this.logger?.error("judge.debate.failed", { 
-        error: err?.message || String(err) 
+      this.logger?.error("judge.debate.failed", {
+        error: err?.message || String(err)
       });
-      return this.getDefaultDebateEvaluation();
+      return null;
     }
   }
 
