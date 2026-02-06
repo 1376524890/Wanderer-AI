@@ -729,6 +729,8 @@ class DebateAgent {
   writeStatus(lastError, sleepSeconds) {
     const llmStatus = this.llm.getStatus();
     const stageMeta = this.getDebateStageMeta();
+    const avgScoreA = this.evaluatedRounds > 0 ? this.cumulativeScores.A / this.evaluatedRounds : null;
+    const avgScoreB = this.evaluatedRounds > 0 ? this.cumulativeScores.B / this.evaluatedRounds : null;
     const status = {
       round: this.round,
       debate_round: this.debateRound,
@@ -743,7 +745,20 @@ class DebateAgent {
       last_reply_at: this.lastReplyAt || nowIso(),
       sleep_seconds: sleepSeconds,
       token_stats: this.tokenStats,
-      api_status: llmStatus
+      api_status: llmStatus,
+      judge: {
+        evaluated_rounds: this.evaluatedRounds,
+        current_evaluation: this.currentEvaluation,
+        current_scores: this.currentScores,
+        cumulative_scores: this.cumulativeScores,
+        average_scores: {
+          A: avgScoreA,
+          B: avgScoreB
+        },
+        overall_winner: avgScoreA && avgScoreB
+          ? (avgScoreA > avgScoreB ? "A" : avgScoreA < avgScoreB ? "B" : "tie")
+          : null
+      }
     };
 
     if (lastError) {

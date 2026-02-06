@@ -114,8 +114,8 @@
                   <div class="value">{{ status.last_reply_at || '-' }}</div>
                 </div>
                 <div class="card">
-                  <div class="label">休眠间隔</div>
-                  <div class="value">{{ status.sleep_seconds ? status.sleep_seconds + 's' : '-' }}</div>
+                  <div class="label">A 平均分</div>
+                  <div class="value">{{ status.judge?.average_scores?.A ? status.judge.average_scores.A.toFixed(2) : '-' }}</div>
                 </div>
                 <div class="card">
                   <div class="label">API 状态</div>
@@ -124,10 +124,8 @@
                   </div>
                 </div>
                 <div class="card">
-                  <div class="label">延迟</div>
-                  <div class="value">
-                    {{ status.api_status?.last_latency_ms ? status.api_status.last_latency_ms + 'ms' : '-' }}
-                  </div>
+                  <div class="label">B 平均分</div>
+                  <div class="value">{{ status.judge?.average_scores?.B ? status.judge.average_scores.B.toFixed(2) : '-' }}</div>
                 </div>
                 <div class="card">
                   <div class="label">Token 总量</div>
@@ -150,6 +148,44 @@
                 <div class="card wide" v-if="lastError">
                   <div class="label">最近错误</div>
                   <div class="value error">{{ lastError }}</div>
+                </div>
+                <div class="card wide" v-if="status.judge?.overall_winner">
+                  <div class="label">当前胜方</div>
+                  <div class="value">{{ status.judge.overall_winner === 'A' ? '✅ 正方 A' : status.judge.overall_winner === 'B' ? '✅ 反方 B' : '🤝 平局' }}</div>
+                </div>
+              </div>
+
+              <div class="status-section" v-if="status.judge?.current_evaluation">
+                <div class="section-title">本轮评分</div>
+                <div class="judge-grid">
+                  <div class="judge-card">
+                    <div class="judge-title">A 正方</div>
+                    <div class="judge-winner" v-if="status.judge.current_evaluation.round_winner === 'A'">🏆</div>
+                    <div class="judge-scores">
+                      <div class="score-row"><span class="score-label">逻辑</span><span class="score-value">{{ status.judge.current_evaluation.scores?.A?.logic || '-' }}</span></div>
+                      <div class="score-row"><span class="score-label">证据</span><span class="score-value">{{ status.judge.current_evaluation.scores?.A?.evidence || '-' }}</span></div>
+                      <div class="score-row"><span class="score-label">反应</span><span class="score-value">{{ status.judge.current_evaluation.scores?.A?.responsiveness || '-' }}</span></div>
+                      <div class="score-row"><span class="score-label">表达</span><span class="score-value">{{ status.judge.current_evaluation.scores?.A?.expression || '-' }}</span></div>
+                      <div class="score-row"><span class="score-label">规则</span><span class="score-value">{{ status.judge.current_evaluation.scores?.A?.rule_compliance || '-' }}</span></div>
+                    </div>
+                    <div class="judge-avg">平均: {{ status.judge.current_evaluation.averages?.A?.toFixed(2) || '-' }}</div>
+                  </div>
+                  <div class="judge-card">
+                    <div class="judge-title">B 反方</div>
+                    <div class="judge-winner" v-if="status.judge.current_evaluation.round_winner === 'B'">🏆</div>
+                    <div class="judge-scores">
+                      <div class="score-row"><span class="score-label">逻辑</span><span class="score-value">{{ status.judge.current_evaluation.scores?.B?.logic || '-' }}</span></div>
+                      <div class="score-row"><span class="score-label">证据</span><span class="score-value">{{ status.judge.current_evaluation.scores?.B?.evidence || '-' }}</span></div>
+                      <div class="score-row"><span class="score-label">反应</span><span class="score-value">{{ status.judge.current_evaluation.scores?.B?.responsiveness || '-' }}</span></div>
+                      <div class="score-row"><span class="score-label">表达</span><span class="score-value">{{ status.judge.current_evaluation.scores?.B?.expression || '-' }}</span></div>
+                      <div class="score-row"><span class="score-label">规则</span><span class="score-value">{{ status.judge.current_evaluation.scores?.B?.rule_compliance || '-' }}</span></div>
+                    </div>
+                    <div class="judge-avg">平均: {{ status.judge.current_evaluation.averages?.B?.toFixed(2) || '-' }}</div>
+                  </div>
+                </div>
+                <div class="judge-stats">
+                  <span>已评轮次: {{ status.judge.evaluated_rounds || '-' }}</span>
+                  <span>累计总分: A {{ status.judge.cumulative_scores?.A?.toFixed(2) || '-' }} / B {{ status.judge.cumulative_scores?.B?.toFixed(2) || '-' }}</span>
                 </div>
               </div>
 
