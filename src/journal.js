@@ -82,6 +82,83 @@ class DebateLog {
     const filePath = path.join(this.journalDir, `${day}.md`);
     fs.appendFileSync(filePath, `${text}\n`, "utf8");
   }
+
+  appendRoundEvaluation(round, evaluation) {
+    this.appendEvent("round_evaluation", { round, evaluation });
+    const stamp = formatUtc8();
+    const lines = [
+      `**评委评分** (${stamp})`,
+      `轮次: ${round}`,
+      `本轮胜方: ${evaluation.round_winner}`,
+      `平均分: 正方 ${evaluation.averages.A.toFixed(2)} | 反方 ${evaluation.averages.B.toFixed(2)}`,
+      ``,
+      `正方详细得分:`,
+      `- 逻辑性: ${evaluation.scores.A.logic}/10`,
+      `- 证据性: ${evaluation.scores.A.evidence}/10`,
+      `- 反应度: ${evaluation.scores.A.responsiveness}/10`,
+      `- 表达力: ${evaluation.scores.A.expression}/10`,
+      `- 规则遵守: ${evaluation.scores.A.rule_compliance}/10`,
+      ``,
+      `反方详细得分:`,
+      `- 逻辑性: ${evaluation.scores.B.logic}/10`,
+      `- 证据性: ${evaluation.scores.B.evidence}/10`,
+      `- 反应度: ${evaluation.scores.B.responsiveness}/10`,
+      `- 表达力: ${evaluation.scores.B.expression}/10`,
+      `- 规则遵守: ${evaluation.scores.B.rule_compliance}/10`,
+      ``,
+      `正方亮点:`,
+      ...evaluation.highlights.A.map(h => `- ${h}`),
+      ``,
+      `反方亮点:`,
+      ...evaluation.highlights.B.map(h => `- ${h}`),
+      ``,
+      `正方改进建议:`,
+      ...evaluation.suggestions.A.map(s => `- ${s}`),
+      ``,
+      `反方改进建议:`,
+      ...evaluation.suggestions.B.map(s => `- ${s}`),
+      ""
+    ].join("\n");
+    this.appendJournalLine(lines);
+  }
+
+  appendFinalEvaluation(debateId, evaluation) {
+    this.appendEvent("final_evaluation", { debateId, evaluation });
+    const stamp = formatUtc8();
+    const lines = [
+      `\n\n# 🏆 辩论赛最终结果 [${stamp}]`,
+      `## 辩题: Debate ${debateId}`,
+      ``,
+      `### 最终判定: ${evaluation.winner === 'A' ? '✅ 正方获胜' : evaluation.winner === 'B' ? '✅ 反方获胜' : '🤝 平局'}`,
+      ``,
+      `### 综合评分:`,
+      `- 正方: ${evaluation.final_scores.A}/100`,
+      `- 反方: ${evaluation.final_scores.B}/100`,
+      ``,
+      `### 关键转折点:`,
+      ...evaluation.key_turning_points.map(p => `- 第${p.round}轮: ${p.description}`),
+      ``,
+      `### 决定性因素:`,
+      ...evaluation.decisive_factors.map(f => `- ${f}`),
+      ``,
+      `### 正方优点:`,
+      ...evaluation.strengths.A.map(s => `- ${s}`),
+      ``,
+      `### 正方不足:`,
+      ...evaluation.weaknesses.A.map(w => `- ${w}`),
+      ``,
+      `### 反方优点:`,
+      ...evaluation.strengths.B.map(s => `- ${s}`),
+      ``,
+      `### 反方不足:`,
+      ...evaluation.weaknesses.B.map(w => `- ${w}`),
+      ``,
+      `### 整体评价:`,
+      evaluation.overall_comment,
+      ""
+    ].join("\n");
+    this.appendJournalLine(lines);
+  }
 }
 
 module.exports = { DebateLog };

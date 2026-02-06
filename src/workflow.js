@@ -62,7 +62,8 @@ function buildDebateFlow(freeRounds) {
       lengthGuide: {
         A: makeGuide(850, 950, "3分钟陈词"),
         B: makeGuide(850, 950, "3分钟陈词")
-      }
+      },
+      durationSeconds: { A: 180, B: 180 }
     },
     {
       key: "cross_1",
@@ -77,7 +78,8 @@ function buildDebateFlow(freeRounds) {
       lengthGuide: {
         A: makeGuide(140, 160, "提问30秒"),
         B: makeGuide(280, 320, "回答1分钟")
-      }
+      },
+      durationSeconds: { A: 30, B: 60 }
     },
     {
       key: "cross_2",
@@ -92,7 +94,8 @@ function buildDebateFlow(freeRounds) {
       lengthGuide: {
         A: makeGuide(280, 320, "回答1分钟"),
         B: makeGuide(140, 160, "提问30秒")
-      }
+      },
+      durationSeconds: { A: 60, B: 30 }
     },
     {
       key: "cross_3",
@@ -107,7 +110,8 @@ function buildDebateFlow(freeRounds) {
       lengthGuide: {
         A: makeGuide(140, 160, "提问30秒"),
         B: makeGuide(280, 320, "回答1分钟")
-      }
+      },
+      durationSeconds: { A: 30, B: 60 }
     },
     {
       key: "cross_4",
@@ -122,7 +126,8 @@ function buildDebateFlow(freeRounds) {
       lengthGuide: {
         A: makeGuide(280, 320, "回答1分钟"),
         B: makeGuide(140, 160, "提问30秒")
-      }
+      },
+      durationSeconds: { A: 60, B: 30 }
     },
     {
       key: "cross_summary",
@@ -137,7 +142,8 @@ function buildDebateFlow(freeRounds) {
       lengthGuide: {
         A: makeGuide(550, 650, "2分钟小结"),
         B: makeGuide(550, 650, "2分钟小结")
-      }
+      },
+      durationSeconds: { A: 120, B: 120 }
     }
   ];
 
@@ -155,7 +161,8 @@ function buildDebateFlow(freeRounds) {
       lengthGuide: {
         A: makeGuide(280, 320, "自由辩论单轮"),
         B: makeGuide(280, 320, "自由辩论单轮")
-      }
+      },
+      durationSeconds: { A: 60, B: 60 }
     });
   }
 
@@ -172,15 +179,28 @@ function buildDebateFlow(freeRounds) {
     lengthGuide: {
       A: makeGuide(850, 950, "3分钟总结"),
       B: makeGuide(850, 950, "3分钟总结")
-    }
+    },
+    durationSeconds: { A: 180, B: 180 }
   });
 
   return flow;
 }
 
+function getStageDuration(stage, agentKey) {
+  if (!stage || !stage.durationSeconds) return null;
+  if (typeof stage.durationSeconds === 'number') {
+    return stage.durationSeconds;
+  }
+  if (stage.durationSeconds.A || stage.durationSeconds.B) {
+    return stage.durationSeconds[agentKey] || null;
+  }
+  return null;
+}
+
 module.exports = {
   buildDebateFlow,
   getStageLengthGuide,
+  getStageDuration,
   formatLengthGuide,
   formatStageLengthGuide
 };

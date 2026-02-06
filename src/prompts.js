@@ -39,7 +39,11 @@ function buildDebatePrompts({
   allowIdentityUpdate,
   isDebateStart,
   isDebateEnd,
-  conversation
+  conversation,
+  evaluation,
+  timeLimit,
+  myScores,
+  opponentScores
 }) {
   const agent = AGENTS[agentKey] || AGENTS.A;
   const identityText = identity && identity.trim() ? identity.trim() : "(空)";
@@ -50,6 +54,38 @@ function buildDebatePrompts({
   const debateStartText = isDebateStart ? "是" : "否";
   const debateEndText = isDebateEnd ? "是" : "否";
   const lengthGuideText = lengthGuide ? formatLengthGuide(lengthGuide) : "按阶段规则控制";
+  const timeLimitText = timeLimit ? `⏱️ 时间限制：${timeLimit}秒` : "";
+
+  let evaluationSection = "";
+  if (evaluation) {
+    const myAvg = (myScores && myScores.average) ? myScores.average.toFixed(2) : evaluation.averages[agentKey]?.toFixed(2) || "N/A";
+    const opponentKey = agentKey === "A" ? "B" : "A";
+    const opponentAvg = (opponentScores && opponentScores.average) ? opponentScores.average.toFixed(2) : evaluation.averages[opponentKey]?.toFixed(2) || "N/A";
+    const myDetails = (myScores && myScores.details) ? myScores.details : evaluation.scores[agentKey];
+    const opponentDetails = (opponentScores && opponentScores.details) ? opponentScores.details : evaluation.scores[opponentKey];
+    const mySuggestions = evaluation.suggestions[agentKey] || [];
+    const opponentHighlights = evaluation.highlights[opponentKey] || [];
+
+    evaluationSection = `
+【⚖️ 评委评分（上一轮）】
+【${agent.name}得分】总分: ${myAvg}/10
+- 逻辑性: ${myDetails?.logic || 5}/10
+- 证据性: ${myDetails?.evidence || 5}/10
+- 反应度: ${myDetails?.responsiveness || 5}/10
+- 表达力: ${myDetails?.expression || 5}/10
+- 规则遵守: ${myDetails?.rule_compliance || 5}/10
+
+【${agentKey === "A" ? "反方" : "正方"}得分】总分: ${opponentAvg}/10
+
+【评委对你的建议】
+${mySuggestions.map(s => `- ${s}`).join("\n")}
+
+【对方亮点】
+${opponentHighlights.map(h => `- ${h}`).join("\n")}
+
+【本轮胜方】${evaluation.round_winner === agentKey ? "✅ 你方获胜" : evaluation.round_winner === "tie" ? "🤝 平局" : "❌ 对方获胜"}
+`;
+  }
 
   const systemPrompt = [
     "你是模拟人类辩论赛的智能体，只输出严格 JSON。",
@@ -61,7 +97,8 @@ function buildDebatePrompts({
     "plan_update 为数组，支持 add/del/change 操作；请在每轮辩论后更新规划，细化应对策略。",
     "experience_update 仅在整场辩论结束时填写 1-3 条可执行经验总结，否则必须为空数组。",
     "可见性约束：plan/experience 仅供内部参考，不得在 reply 中直接复述或泄露。",
-    "禁止输出多余文本、禁止 Markdown 代码块。"
+    "禁止输出多余文本、禁止 Markdown 代码块。",
+    evaluation ? "你必须根据评委评分调整策略，强化优势，改进不足。" : ""
   ].join(" ");
 
   const userPrompt = [
@@ -71,6 +108,7 @@ function buildDebatePrompts({
     `阶段标识：${stageKey || "-"}`,
     `阶段：${stageTitle || "-"}`,
     `阶段规则：${stageRule || "-"}`,
+    timeLimitText,
     `字数建议：${lengthGuideText}`,
     `你的角色：${role || "-"}`,
     `发言顺序：${orderText}`,
@@ -79,9 +117,12 @@ function buildDebatePrompts({
     `是否为整场结束：${debateEndText}`,
     `当前主题：${topicText}`,
     "",
+    evaluationSection,
+    "",
     "【字数控制】",
     "必须遵循字数建议范围，超出需在下一轮自行压缩。",
     "系统已配置最大token限制为4096，请确保回复不会超出此限制。",
+    evaluation ? "【⚠️ 重要提醒】请根据评委评分和建议，在plan_update中明确改进措施。" : "",
     "",
     "【共享 experience 文档】",
     experienceText,
@@ -96,8 +137,8 @@ function buildDebatePrompts({
     "1) 若主题未设定，请给出可辩论主题，并在 topic 字段填写。",
     "2) 严格遵循本轮角色与阶段规则发言，不越权、不抢答。",
     "3) reply 内容与时长匹配；提问者只提 1 个问题，回答者只回应问题。",
-    "4) 每轮辩论后都应更新 plan，在 plan_update 中提供 0-5 条操作，细化辩论规划和应对方案。",
-    "5) 若为整场结束，experience_update 必须给出 1-3 条经验总结。",
+    evaluation ? "4) 根据评委评分，在 plan_update 中提供 0-5 条操作，必须包含针对性的改进措施。" : "4) 每轮辩论后都应更新 plan，在 plan_update 中提供 0-5 条操作，细化辩论规划和应对方案。",
+    "5) 若为整场结束，experience_update 必须给出 1-3 条经验总结（强化学习模式：总结可复用的辩论技巧和策略）。",
     "",
     "【plan_update 操作格式】",
     "- 对象：{ \"op\": \"add\", \"text\": \"...\" }",
