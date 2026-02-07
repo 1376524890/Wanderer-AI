@@ -19,6 +19,16 @@ function sleep(seconds) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(1, seconds) * 1000));
 }
 
+function isProcessAlive(pid) {
+  if (!pid || !Number.isFinite(Number(pid))) return false;
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
 function normalizeOp(op) {
   const raw = String(op || "").trim().toLowerCase();
   if (!raw) return "";
@@ -155,8 +165,86 @@ class DebateAgent {
     this.tokenStats = this.loadTokenStats();
     this.debateFlow = buildDebateFlow(config.freeDebateRounds);
 
+    this.lockPath = path.join(config.stateDir, "agent.lock");
+    this.lockCleanupRegistered = false;
+    this.lockOwned = this.acquireAgentLock();
+
     this.ensureIdentityFiles();
     this.loadState();
+  }
+
+  acquireAgentLock() {
+    const payload = JSON.stringify({ pid: process.pid, started_at: new Date().toISOString() }, null, 2);
+    try {
+      const fd = fs.openSync(this.lockPath, "wx");
+      fs.writeFileSync(fd, payload, "utf8");
+      fs.closeSync(fd);
+      this.registerLockCleanup();
+      return true;
+    } catch (err) {
+      if (err.code !== "EEXIST") {
+        this.logger?.error("agent.lock.read_failed", { error: err.message });
+        return false;
+      }
+    }
+
+    let existing = null;
+    try {
+      existing = JSON.parse(fs.readFileSync(this.lockPath, "utf8"));
+    } catch (err) {
+      existing = null;
+    }
+
+    if (existing && Number(existing.pid) === Number(process.pid)) {
+      this.registerLockCleanup();
+      return true;
+    }
+
+    if (existing && isProcessAlive(existing.pid)) {
+      this.logger?.error("agent.lock.held", { pid: existing.pid });
+      return false;
+    }
+
+    try {
+      fs.writeFileSync(this.lockPath, payload, "utf8");
+      this.registerLockCleanup();
+      return true;
+    } catch (err) {
+      this.logger?.error("agent.lock.acquire_failed", { error: err.message });
+      return false;
+    }
+  }
+
+  registerLockCleanup() {
+    if (this.lockCleanupRegistered) return;
+    this.lockCleanupRegistered = true;
+    const cleanup = () => {
+      try {
+        if (!fs.existsSync(this.lockPath)) return;
+        const raw = fs.readFileSync(this.lockPath, "utf8");
+        const data = JSON.parse(raw);
+        if (Number(data.pid) === Number(process.pid)) {
+          fs.unlinkSync(this.lockPath);
+        }
+      } catch (err) {
+        // ignore cleanup errors
+      }
+    };
+
+    process.on("exit", cleanup);
+    process.on("SIGINT", () => {
+      cleanup();
+      process.exit(0);
+    });
+    process.on("SIGTERM", () => {
+      cleanup();
+      process.exit(0);
+    });
+  }
+
+  ensureLockOwnership() {
+    this.lockOwned = this.acquireAgentLock();
+    return this.lockOwned;
   }
 
   ensureIdentityFiles() {
@@ -207,6 +295,10 @@ class DebateAgent {
   async runForever() {
     this.logger?.info("debate.start", { pid: process.pid });
     while (true) {
+      if (!this.ensureLockOwnership()) {
+        this.writeStatus("agent lock held by another process", 30);
+        return;
+      }
       let error = "";
       let sleepSeconds = this.config.loopSleepSeconds;
       try {
