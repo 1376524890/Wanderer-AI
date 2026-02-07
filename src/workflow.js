@@ -7,6 +7,10 @@ function makeGuide(min, max, hint, unit = "字") {
   return { min, max, hint, unit };
 }
 
+function calcMaxChars(minutes) {
+  return Math.round(minutes * 300);
+}
+
 function normalizeFreeRounds(freeRounds) {
   return Math.max(1, Number.isFinite(freeRounds) ? freeRounds : 4);
 }
@@ -62,7 +66,8 @@ function buildDebateFlow(freeRounds) {
       lengthGuide: {
         A: makeGuide(850, 950, "3分钟陈词"),
         B: makeGuide(850, 950, "3分钟陈词")
-      }
+      },
+      maxChars: { A: 900, B: 900 }
     },
     {
       key: "cross_1",
@@ -77,7 +82,8 @@ function buildDebateFlow(freeRounds) {
       lengthGuide: {
         A: makeGuide(140, 160, "提问30秒"),
         B: makeGuide(280, 320, "回答1分钟")
-      }
+      },
+      maxChars: { A: 150, B: 300 }
     },
     {
       key: "cross_2",
@@ -92,7 +98,8 @@ function buildDebateFlow(freeRounds) {
       lengthGuide: {
         A: makeGuide(280, 320, "回答1分钟"),
         B: makeGuide(140, 160, "提问30秒")
-      }
+      },
+      maxChars: { A: 300, B: 150 }
     },
     {
       key: "cross_3",
@@ -107,7 +114,8 @@ function buildDebateFlow(freeRounds) {
       lengthGuide: {
         A: makeGuide(140, 160, "提问30秒"),
         B: makeGuide(280, 320, "回答1分钟")
-      }
+      },
+      maxChars: { A: 150, B: 300 }
     },
     {
       key: "cross_4",
@@ -122,7 +130,8 @@ function buildDebateFlow(freeRounds) {
       lengthGuide: {
         A: makeGuide(280, 320, "回答1分钟"),
         B: makeGuide(140, 160, "提问30秒")
-      }
+      },
+      maxChars: { A: 300, B: 150 }
     },
     {
       key: "cross_summary",
@@ -137,7 +146,8 @@ function buildDebateFlow(freeRounds) {
       lengthGuide: {
         A: makeGuide(550, 650, "2分钟小结"),
         B: makeGuide(550, 650, "2分钟小结")
-      }
+      },
+      maxChars: { A: 600, B: 600 }
     }
   ];
 
@@ -155,7 +165,8 @@ function buildDebateFlow(freeRounds) {
       lengthGuide: {
         A: makeGuide(280, 320, "自由辩论单轮"),
         B: makeGuide(280, 320, "自由辩论单轮")
-      }
+      },
+      maxChars: { A: 300, B: 300 }
     });
   }
 
@@ -172,15 +183,28 @@ function buildDebateFlow(freeRounds) {
     lengthGuide: {
       A: makeGuide(850, 950, "3分钟总结"),
       B: makeGuide(850, 950, "3分钟总结")
-    }
+    },
+    maxChars: { A: 900, B: 900 }
   });
 
   return flow;
 }
 
+function getStageMaxChars(stage, agentKey) {
+  if (!stage || !stage.maxChars) return null;
+  if (typeof stage.maxChars === 'number') {
+    return stage.maxChars;
+  }
+  if (stage.maxChars.A || stage.maxChars.B) {
+    return stage.maxChars[agentKey] || null;
+  }
+  return null;
+}
+
 module.exports = {
   buildDebateFlow,
   getStageLengthGuide,
+  getStageMaxChars,
   formatLengthGuide,
   formatStageLengthGuide
 };

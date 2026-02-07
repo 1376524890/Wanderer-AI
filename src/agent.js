@@ -2,7 +2,7 @@
 不负责：渲染监控界面。
 输入：配置、对话历史、身份档案。
 输出：对话日志、身份更新、状态文件。
-关联：src/llmClient.js, src/journal.js, src/prompts.js。
+关联：src/llmClient.js, src/journal.js, src/prompts.js, src/judge.js。
 */
 
 const fs = require("fs");
@@ -11,11 +11,22 @@ const path = require("path");
 const { DebateLog } = require("./journal");
 const { LlmClient } = require("./llmClient");
 const { buildDebatePrompts } = require("./prompts");
-const { buildDebateFlow, formatStageLengthGuide, getStageLengthGuide } = require("./workflow");
+const { buildDebateFlow, formatStageLengthGuide, getStageLengthGuide, getStageMaxChars } = require("./workflow");
+const { DebateJudge } = require("./judge");
 const { ensureDir, nowIso, readTail, truncate, safeJsonExtract, formatUtc8 } = require("./utils");
 
 function sleep(seconds) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(1, seconds) * 1000));
+}
+
+function isProcessAlive(pid) {
+  if (!pid || !Number.isFinite(Number(pid))) return false;
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch (err) {
+    return false;
+  }
 }
 
 function normalizeOp(op) {
@@ -102,11 +113,23 @@ function appendAndTrimConversation(base, addition, maxChars) {
   return combined.slice(-maxChars);
 }
 
+const FALLBACK_TOPICS = [
+  "人工智能应否优先用于公共治理而非商业营销？",
+  "高校招生应更看重综合素质而非统一考试成绩？",
+  "城市应限制私家车出行以改善环境？",
+  "短视频平台应承担用户成瘾的主要责任？",
+  "企业远程办公应成为常态而非特例？",
+  "未成年人应全面禁止网络直播打赏？",
+  "应否对生成式 AI 内容强制标注来源？",
+  "公共资源分配应优先效率还是公平？"
+];
+
 class DebateAgent {
   constructor(config, logger) {
     this.config = config;
     this.logger = logger;
     this.llm = new LlmClient(config, logger);
+    this.judge = new DebateJudge(config, logger);
     this.log = new DebateLog(config.journalDir, config.logDir, logger);
 
     ensureDir(config.stateDir);
@@ -120,6 +143,11 @@ class DebateAgent {
     this.identityAPath = path.join(identityDir, config.identityAFile || "identity_a.md");
     this.identityBPath = path.join(identityDir, config.identityBFile || "identity_b.md");
 
+    this.currentEvaluation = null;
+    this.currentScores = { A: null, B: null };
+    this.cumulativeScores = { A: 0, B: 0 };
+    this.evaluatedRounds = 0;
+
     const experienceDir = config.experienceDir || config.stateDir;
     ensureDir(experienceDir);
     this.experiencePath = path.join(experienceDir, config.experienceFile || "experience.md");
@@ -132,12 +160,91 @@ class DebateAgent {
     this.debateRound = 0;
     this.debateId = 1;
     this.topic = "";
+    this.topicHistory = [];
     this.lastReplyAt = null;
     this.tokenStats = this.loadTokenStats();
     this.debateFlow = buildDebateFlow(config.freeDebateRounds);
 
+    this.lockPath = path.join(config.stateDir, "agent.lock");
+    this.lockCleanupRegistered = false;
+    this.lockOwned = this.acquireAgentLock();
+
     this.ensureIdentityFiles();
     this.loadState();
+  }
+
+  acquireAgentLock() {
+    const payload = JSON.stringify({ pid: process.pid, started_at: new Date().toISOString() }, null, 2);
+    try {
+      const fd = fs.openSync(this.lockPath, "wx");
+      fs.writeFileSync(fd, payload, "utf8");
+      fs.closeSync(fd);
+      this.registerLockCleanup();
+      return true;
+    } catch (err) {
+      if (err.code !== "EEXIST") {
+        this.logger?.error("agent.lock.read_failed", { error: err.message });
+        return false;
+      }
+    }
+
+    let existing = null;
+    try {
+      existing = JSON.parse(fs.readFileSync(this.lockPath, "utf8"));
+    } catch (err) {
+      existing = null;
+    }
+
+    if (existing && Number(existing.pid) === Number(process.pid)) {
+      this.registerLockCleanup();
+      return true;
+    }
+
+    if (existing && isProcessAlive(existing.pid)) {
+      this.logger?.error("agent.lock.held", { pid: existing.pid });
+      return false;
+    }
+
+    try {
+      fs.writeFileSync(this.lockPath, payload, "utf8");
+      this.registerLockCleanup();
+      return true;
+    } catch (err) {
+      this.logger?.error("agent.lock.acquire_failed", { error: err.message });
+      return false;
+    }
+  }
+
+  registerLockCleanup() {
+    if (this.lockCleanupRegistered) return;
+    this.lockCleanupRegistered = true;
+    const cleanup = () => {
+      try {
+        if (!fs.existsSync(this.lockPath)) return;
+        const raw = fs.readFileSync(this.lockPath, "utf8");
+        const data = JSON.parse(raw);
+        if (Number(data.pid) === Number(process.pid)) {
+          fs.unlinkSync(this.lockPath);
+        }
+      } catch (err) {
+        // ignore cleanup errors
+      }
+    };
+
+    process.on("exit", cleanup);
+    process.on("SIGINT", () => {
+      cleanup();
+      process.exit(0);
+    });
+    process.on("SIGTERM", () => {
+      cleanup();
+      process.exit(0);
+    });
+  }
+
+  ensureLockOwnership() {
+    this.lockOwned = this.acquireAgentLock();
+    return this.lockOwned;
   }
 
   ensureIdentityFiles() {
@@ -178,6 +285,7 @@ class DebateAgent {
       this.debateRound = Number.isFinite(data.debate_round) ? data.debate_round : this.debateRound;
       this.debateId = Number.isFinite(data.debate_id) ? data.debate_id : this.debateId;
       this.topic = typeof data.topic === "string" ? data.topic : this.topic;
+      this.topicHistory = Array.isArray(data.topic_history) ? data.topic_history : [];
       this.lastReplyAt = data.last_reply_at || this.lastReplyAt;
     } catch (err) {
       // ignore
@@ -187,6 +295,10 @@ class DebateAgent {
   async runForever() {
     this.logger?.info("debate.start", { pid: process.pid });
     while (true) {
+      if (!this.ensureLockOwnership()) {
+        this.writeStatus("agent lock held by another process", 30);
+        return;
+      }
       let error = "";
       let sleepSeconds = this.config.loopSleepSeconds;
       try {
@@ -211,14 +323,30 @@ class DebateAgent {
     const isDebateStart = nextDebateRound === 1;
     const isDebateEnd = nextDebateRound === debateTotalRounds;
     const allowIdentityUpdate = true;
-    const roundTopic = this.topic || "";
+
+    if (isDebateStart) {
+      this.currentEvaluation = null;
+      this.currentScores = { A: null, B: null };
+      this.cumulativeScores = { A: 0, B: 0 };
+      this.evaluatedRounds = 0;
+    }
 
     const conversationContext = readTail(this.conversationPath, this.config.contextMaxChars);
+
+    let roundTopic = this.topic || "";
+    if (isDebateStart) {
+      roundTopic = await this.resolveDebateTopic(conversationContext, roundTopic, nextRound);
+    }
+    const allowTopicChange = isDebateStart && !roundTopic;
 
     const firstAgent = debateStep.order === "B" ? "B" : "A";
     const secondAgent = firstAgent === "A" ? "B" : "A";
 
     const allowIdentityUpdateAlways = true;
+
+    const firstAgentMaxChars = getStageMaxChars(debateStep, firstAgent);
+    const secondAgentMaxChars = getStageMaxChars(debateStep, secondAgent);
+
     const agentFirstResult = await this.queryAgent({
       agentKey: firstAgent,
       identityPath: firstAgent === "A" ? this.identityAPath : this.identityBPath,
@@ -238,7 +366,11 @@ class DebateAgent {
       isDebateStart,
       isDebateEnd,
       experience: this.readExperience(),
-      conversation: conversationContext
+      conversation: conversationContext,
+      evaluation: this.currentEvaluation,
+      maxChars: firstAgentMaxChars,
+      myScores: this.currentScores[firstAgent],
+      opponentScores: this.currentScores[secondAgent]
     });
 
     if (agentFirstResult.error) {
@@ -247,7 +379,7 @@ class DebateAgent {
       throw new Error(error);
     }
 
-    const topicAfterFirst = this.pickTopic(roundTopic, agentFirstResult.topic);
+    const topicAfterFirst = this.pickTopic(roundTopic, agentFirstResult.topic, allowTopicChange);
     const virtualFirstEntry = buildConversationEntry(firstAgent, agentFirstResult.reply, nextRound, topicAfterFirst);
     const conversationAfterFirst = appendAndTrimConversation(
       conversationContext,
@@ -274,7 +406,11 @@ class DebateAgent {
       isDebateStart,
       isDebateEnd,
       experience: this.readExperience(),
-      conversation: conversationAfterFirst
+      conversation: conversationAfterFirst,
+      evaluation: this.currentEvaluation,
+      maxChars: secondAgentMaxChars,
+      myScores: this.currentScores[secondAgent],
+      opponentScores: this.currentScores[firstAgent]
     });
 
     if (agentSecondResult.error) {
@@ -283,7 +419,43 @@ class DebateAgent {
       throw new Error(error);
     }
 
-    const topicAfterSecond = this.pickTopic(topicAfterFirst, agentSecondResult.topic);
+    const topicAfterSecond = this.pickTopic(topicAfterFirst, agentSecondResult.topic, allowTopicChange);
+
+    const evaluation = await this.judge.evaluateRound({
+      topic: topicAfterSecond,
+      stage: debateStep.title,
+      stageKey: debateStep.key,
+      stageRule: debateStep.rule,
+      replyA: agentFirstResult.reply,
+      replyB: agentSecondResult.reply,
+      speakerA: firstAgent,
+      speakerB: secondAgent,
+      round: nextRound
+    });
+
+    if (evaluation) {
+      this.currentEvaluation = evaluation;
+      this.currentScores = {
+        A: {
+          average: evaluation.averages.A,
+          details: evaluation.scores.A
+        },
+        B: {
+          average: evaluation.averages.B,
+          details: evaluation.scores.B
+        }
+      };
+      this.cumulativeScores.A += evaluation.averages.A;
+      this.cumulativeScores.B += evaluation.averages.B;
+      this.evaluatedRounds += 1;
+    } else {
+      this.logger?.warn("agent.round.skip_score", {
+        round: nextRound,
+        reason: "评委LLM不可用，跳过本轮评分"
+      });
+      this.log.appendSystemEvent("round_score_skipped", "评委LLM不可用，跳过本轮评分");
+    }
+
     this.log.appendRoundStart(nextRound, roundTopic);
     this.appendConversation(`\n=== Round ${nextRound} | Topic: ${roundTopic || "(待确定)"} ===\n`);
     if (topicAfterFirst && topicAfterFirst !== roundTopic) {
@@ -295,6 +467,8 @@ class DebateAgent {
     }
     this.appendAgentReply(secondAgent, agentSecondResult.reply, nextRound, topicAfterSecond, debateStep.title);
 
+    this.log.appendRoundEvaluation(nextRound, evaluation);
+
     const resultsByAgent = {
       [agentFirstResult.agentKey]: agentFirstResult,
       [agentSecondResult.agentKey]: agentSecondResult
@@ -305,6 +479,9 @@ class DebateAgent {
 
     this.round = nextRound;
     const resolvedTopic = topicAfterSecond || topicAfterFirst || roundTopic;
+    if (isDebateStart && resolvedTopic) {
+      this.recordTopic(resolvedTopic);
+    }
     this.topic = resolvedTopic;
     this.debateRound = isDebateEnd ? 0 : nextDebateRound;
 
@@ -315,28 +492,121 @@ class DebateAgent {
       stage: debateStep.title,
       topic: resolvedTopic,
       agentA: resultsByAgent.A,
-      agentB: resultsByAgent.B
+      agentB: resultsByAgent.B,
+      evaluation: this.currentEvaluation,
+      cumulativeScores: { ...this.cumulativeScores },
+      avgScores: {
+        A: this.cumulativeScores.A / this.evaluatedRounds,
+        B: this.cumulativeScores.B / this.evaluatedRounds
+      }
     };
     fs.writeFileSync(this.lastTurnPath, JSON.stringify(lastTurn, null, 2), "utf8");
 
     if (isDebateEnd) {
+      const debateHistory = this.readFullConversation();
+      const finalEvaluation = await this.judge.evaluateDebate(debateHistory, resolvedTopic);
+      if (finalEvaluation) {
+        this.log.appendFinalEvaluation(currentDebateId, finalEvaluation);
+      } else {
+        this.logger?.warn("agent.debate.skip_score", {
+          debate_id: currentDebateId,
+          reason: "评委LLM不可用，跳过整场评分"
+        });
+        this.log.appendSystemEvent("debate_score_skipped", "评委LLM不可用，跳过整场评分");
+      }
+
       this.appendExperienceUpdate(currentDebateId, resolvedTopic, [
         { agentKey: "A", updates: lastTurn.agentA.experienceUpdate },
         { agentKey: "B", updates: lastTurn.agentB.experienceUpdate }
       ]);
       this.resetIdentityFiles();
       this.topic = "";
-      this.log.appendSystemEvent("debate_end", `Debate ${currentDebateId} completed`);
+      this.log.appendSystemEvent("debate_end", `Debate ${currentDebateId} completed. Winner: ${finalEvaluation.winner}`);
       this.debateId += 1;
     }
 
     return { sleepSeconds: Math.max(1, this.config.loopSleepSeconds) };
   }
 
-  pickTopic(current, proposed) {
+  pickTopic(current, proposed, allowChange = true) {
     const trimmed = String(proposed || "").trim();
     if (!trimmed) return current;
+    if (!allowChange) return current;
+    if (this.isTopicUsed(trimmed)) return current;
     return trimmed;
+  }
+
+  isTopicUsed(topic) {
+    const trimmed = String(topic || "").trim();
+    if (!trimmed) return false;
+    return this.topicHistory.includes(trimmed);
+  }
+
+  recordTopic(topic) {
+    const trimmed = String(topic || "").trim();
+    if (!trimmed) return;
+    if (!this.topicHistory.includes(trimmed)) {
+      this.topicHistory.push(trimmed);
+    }
+  }
+
+  pickFallbackTopic() {
+    for (const candidate of FALLBACK_TOPICS) {
+      if (!this.isTopicUsed(candidate)) return candidate;
+    }
+    const base = "公共政策应更强调公平还是效率？";
+    let candidate = base;
+    let index = 1;
+    while (this.isTopicUsed(candidate)) {
+      candidate = `${base}（备选${index}）`;
+      index += 1;
+    }
+    return candidate;
+  }
+
+  async resolveDebateTopic(conversation, currentTopic, round) {
+    const trimmed = String(currentTopic || "").trim();
+    if (trimmed && !this.isTopicUsed(trimmed)) {
+      return trimmed;
+    }
+    const generated = await this.generateNewTopic(conversation, trimmed, round);
+    if (generated && !this.isTopicUsed(generated)) {
+      return generated;
+    }
+    return this.pickFallbackTopic();
+  }
+
+  async generateNewTopic(conversation, currentTopic, round) {
+    if (!conversation || conversation.trim() === "(无)") return "";
+
+    const systemPrompt = "你是一个辩论题目生成助手。分析给定的对话内容，找出核心分歧点，并基于此生成一个新的辩论题目。要求：1）题目必须可辩论，不能是事实陈述；2）题目不能与历史题目相同；3）题目应该引发对立观点；4）题目简洁明确，10-30字。输出严格JSON格式：{\"disagreement\":\"核心分歧点\",\"new_topic\":\"新辩论题目\"}";
+
+    const historyText = this.topicHistory.length
+      ? this.topicHistory.slice(-20).join("；")
+      : "(无)";
+    const userPrompt = [
+      `当前轮次：${round}`,
+      `当前题目：${currentTopic || "(未设定)"}`,
+      `历史题目：${historyText}`,
+      "【对话内容】",
+      conversation
+    ].join("\n");
+
+    try {
+      const result = await this.llm.chat(systemPrompt, userPrompt, { model: this.config.vllmModel });
+      const json = safeJsonExtract(result.content || "");
+      if (json && json.new_topic && json.new_topic.trim()) {
+        const newTopic = json.new_topic.trim();
+        if (!this.topicHistory.includes(newTopic)) {
+          this.log.appendSystemEvent("topic_generated", `Round ${round}: ${newTopic} (分歧点: ${json.disagreement || "未明确"})`);
+          return newTopic;
+        }
+      }
+    } catch (err) {
+      this.logger?.error("topic.generate.failed", { error: err?.message || String(err) });
+    }
+
+    return "";
   }
 
   async queryAgent({
@@ -358,7 +628,11 @@ class DebateAgent {
     isDebateStart,
     isDebateEnd,
     experience,
-    conversation
+    conversation,
+    evaluation,
+    maxChars,
+    myScores,
+    opponentScores
   }) {
     const identity = this.readIdentity(identityPath);
     const { systemPrompt, userPrompt } = buildDebatePrompts({
@@ -380,7 +654,10 @@ class DebateAgent {
       experience,
       isDebateStart,
       isDebateEnd,
-      conversation
+      conversation,
+      evaluation,
+      myScores,
+      opponentScores
     });
 
     let rawResponse = "";
@@ -403,7 +680,12 @@ class DebateAgent {
     }
 
     const parsed = this.parseAgentResponse(rawResponse);
-    const reply = parsed.reply || (llmError ? `(API error: ${truncate(llmError, 120)})` : "(无回复)");
+    let reply = parsed.reply || (llmError ? `(API error: ${truncate(llmError, 120)})` : "(无回复)");
+    
+    if (maxChars && maxChars > 0 && reply.length > maxChars) {
+      reply = reply.slice(0, maxChars);
+    }
+    
     const planUpdate = allowIdentityUpdate ? parsed.planUpdate : [];
     const experienceUpdate = parsed.experienceUpdate || [];
 
@@ -426,16 +708,21 @@ class DebateAgent {
 
     const json = safeJsonExtract(text);
     if (!json || typeof json !== "object") {
-      return { reply: text, topic: "", planUpdate: [], experienceUpdate: [] };
+      return { reply: this.stripThinkTags(text), topic: "", planUpdate: [], experienceUpdate: [] };
     }
 
-    const reply = String(json.reply || json.response || "").trim();
+    const reply = this.stripThinkTags(String(json.reply || json.response || ""));
     const topic = String(json.topic || "").trim();
     const update = json.plan_update || json.planUpdate || json.identity_update || json.identityUpdate || [];
     const planUpdate = this.normalizeUpdateList(update);
     const expUpdate = json.experience_update || json.experienceUpdate || [];
     const experienceUpdate = this.normalizeList(expUpdate);
     return { reply, topic, planUpdate, experienceUpdate };
+  }
+
+  stripThinkTags(text) {
+    if (!text || typeof text !== 'string') return '';
+    return text.replace(/[\s\S]*?<\/think>/gi, '').trim();
   }
 
   normalizeList(value) {
@@ -555,6 +842,8 @@ class DebateAgent {
   writeStatus(lastError, sleepSeconds) {
     const llmStatus = this.llm.getStatus();
     const stageMeta = this.getDebateStageMeta();
+    const avgScoreA = this.evaluatedRounds > 0 ? this.cumulativeScores.A / this.evaluatedRounds : null;
+    const avgScoreB = this.evaluatedRounds > 0 ? this.cumulativeScores.B / this.evaluatedRounds : null;
     const status = {
       round: this.round,
       debate_round: this.debateRound,
@@ -565,10 +854,24 @@ class DebateAgent {
       debate_stage_length: stageMeta.lengthGuide,
       debate_total_rounds: this.debateFlow.length,
       topic: this.topic,
+      topic_history: this.topicHistory.slice(-50),
       last_reply_at: this.lastReplyAt || nowIso(),
       sleep_seconds: sleepSeconds,
       token_stats: this.tokenStats,
-      api_status: llmStatus
+      api_status: llmStatus,
+      judge: {
+        evaluated_rounds: this.evaluatedRounds,
+        current_evaluation: this.currentEvaluation,
+        current_scores: this.currentScores,
+        cumulative_scores: this.cumulativeScores,
+        average_scores: {
+          A: avgScoreA,
+          B: avgScoreB
+        },
+        overall_winner: avgScoreA && avgScoreB
+          ? (avgScoreA > avgScoreB ? "A" : avgScoreA < avgScoreB ? "B" : "tie")
+          : null
+      }
     };
 
     if (lastError) {
@@ -644,8 +947,17 @@ class DebateAgent {
     fs.writeFileSync(this.identityBPath, "", "utf8");
   }
 
+  readFullConversation() {
+    if (!fs.existsSync(this.conversationPath)) return "";
+    try {
+      return fs.readFileSync(this.conversationPath, "utf8");
+    } catch (err) {
+      return "";
+    }
+  }
+
   readExperience() {
-    const maxChars = this.config.experienceMaxChars || 3000;
+    const maxChars = this.config.experienceMaxChars || 5000;
     if (!fs.existsSync(this.experiencePath)) return "";
     const data = fs.readFileSync(this.experiencePath, "utf8");
     if (data.length <= maxChars) return data;
@@ -671,6 +983,21 @@ class DebateAgent {
 
     fs.appendFileSync(this.experiencePath, `${lines.join("\n")}\n\n`, "utf8");
     this.log.appendEvent("experience_update", { topic, updates: updatesByAgent });
+
+    const avgScoreA = this.cumulativeScores.A / this.evaluatedRounds;
+    const avgScoreB = this.cumulativeScores.B / this.evaluatedRounds;
+
+    const rlSection = [
+      `\n### 强化学习统计`,
+      `- 评估轮数: ${this.evaluatedRounds}`,
+      `- 正方平均分: ${avgScoreA.toFixed(2)}/10`,
+      `- 反方平均分: ${avgScoreB.toFixed(2)}/10`,
+      `- 累计总分: 正方 ${this.cumulativeScores.A.toFixed(2)} | 反方 ${this.cumulativeScores.B.toFixed(2)}`,
+      `- 表现评估: ${avgScoreA > avgScoreB ? "正方领先" : avgScoreB > avgScoreA ? "反方领先" : "势均力敌"}`,
+      ""
+    ];
+
+    fs.appendFileSync(this.experiencePath, `${rlSection.join("\n")}\n\n`, "utf8");
   }
 }
 
