@@ -42,7 +42,8 @@ function buildDebatePrompts({
   conversation,
   evaluation,
   myScores,
-  opponentScores
+  opponentScores,
+  rlContext
 }) {
   const agent = AGENTS[agentKey] || AGENTS.A;
   const identityText = identity && identity.trim() ? identity.trim() : "(空)";
@@ -95,9 +96,29 @@ ${opponentHighlights.map(h => `- ${h}`).join("\n")}
     "plan_update 为数组，支持 add/del/change 操作；请在每轮辩论后更新规划，细化应对策略。",
     "experience_update 仅在整场辩论结束时填写 1-3 条可执行经验总结，否则必须为空数组。",
     "可见性约束：plan/experience 仅供内部参考，不得在 reply 中直接复述或泄露。",
+    "强化学习策略仅供内部参考，不得在 reply 中显式提及策略、权重、奖励或训练细节。",
     "禁止输出多余文本、禁止 Markdown 代码块。",
     evaluation ? "你必须根据评委评分调整策略，强化优势，改进不足。" : ""
   ].join(" ");
+
+  const rlSection = rlContext ? [
+    "【强化学习策略】",
+    "策略动作（必须落实到本轮发言）：",
+    ...((rlContext.actions || []).length
+      ? rlContext.actions.map((item) => `- ${item.label}: ${item.desc}`)
+      : ["- (无)"]),
+    "",
+    "训练焦点（优先级从高到低）：",
+    ...((rlContext.focus || []).length
+      ? rlContext.focus.map((item) => `- ${item.label} (权重 ${item.weight})`)
+      : ["- (无)"]),
+    "",
+    `${rlContext.opponentLabel || "对手"}弱点（优先攻击）：`,
+    ...((rlContext.weaknesses || []).length
+      ? rlContext.weaknesses.map((item) => `- ${item}`)
+      : ["- (未发现明显弱点)"]),
+    ""
+  ].join("\n") : "";
 
   const userPrompt = [
     `当前全局回合：${round}`,
@@ -116,6 +137,7 @@ ${opponentHighlights.map(h => `- ${h}`).join("\n")}
     "",
     evaluationSection,
     "",
+    rlSection,
     "【字数控制】",
     "必须遵循字数建议范围，超出需在下一轮自行压缩。",
     "系统已配置最大token限制为4096，请确保回复不会超出此限制。",

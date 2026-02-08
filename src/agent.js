@@ -13,6 +13,7 @@ const { LlmClient } = require("./llmClient");
 const { buildDebatePrompts } = require("./prompts");
 const { buildDebateFlow, formatStageLengthGuide, getStageLengthGuide, getStageMaxChars } = require("./workflow");
 const { DebateJudge } = require("./judge");
+const { RlPolicy } = require("./rlPolicy");
 const { ensureDir, nowIso, readTail, truncate, safeJsonExtract, formatUtc8 } = require("./utils");
 
 function sleep(seconds) {
@@ -155,6 +156,11 @@ class DebateAgent {
     const archiveDir = config.archiveDir || path.join(config.stateDir, "archives");
     ensureDir(archiveDir);
     this.archiveDir = archiveDir;
+
+    if (config.rlDir) {
+      ensureDir(config.rlDir);
+    }
+    this.rl = new RlPolicy(config, this.log, this.logger);
 
     this.round = 0;
     this.debateRound = 0;
@@ -456,6 +462,22 @@ class DebateAgent {
       this.log.appendSystemEvent("round_score_skipped", "评委LLM不可用，跳过本轮评分");
     }
 
+    if (evaluation && this.rl) {
+      const replies = {
+        A: agentFirstResult.agentKey === "A" ? agentFirstResult.reply : agentSecondResult.reply,
+        B: agentFirstResult.agentKey === "B" ? agentFirstResult.reply : agentSecondResult.reply
+      };
+      this.rl.updateFromEvaluation({
+        evaluation,
+        round: nextRound,
+        debateId: currentDebateId,
+        topic: topicAfterSecond || topicAfterFirst || roundTopic,
+        stageKey: debateStep.key,
+        stageTitle: debateStep.title,
+        replies
+      });
+    }
+
     this.log.appendRoundStart(nextRound, roundTopic);
     this.appendConversation(`\n=== Round ${nextRound} | Topic: ${roundTopic || "(待确定)"} ===\n`);
     if (topicAfterFirst && topicAfterFirst !== roundTopic) {
@@ -635,6 +657,14 @@ class DebateAgent {
     opponentScores
   }) {
     const identity = this.readIdentity(identityPath);
+    const opponentKey = agentKey === "A" ? "B" : "A";
+    const rlContext = this.rl?.getPromptContext({
+      agentKey,
+      opponentKey,
+      round,
+      myScores,
+      opponentScores
+    });
     const { systemPrompt, userPrompt } = buildDebatePrompts({
       agentKey,
       round,
@@ -657,7 +687,8 @@ class DebateAgent {
       conversation,
       evaluation,
       myScores,
-      opponentScores
+      opponentScores,
+      rlContext
     });
 
     let rawResponse = "";

@@ -11,7 +11,7 @@ usage() {
 
   --dry-run  仅显示将要删除的内容，不执行删除
   --all      额外删除依赖/虚拟环境（node_modules/、.venv/）
-  --restart  彻底清除历史记录并重置身份/经验（适合一键重新开始）
+  --restart  彻底清除历史记录并重置身份/经验/强化学习策略（适合一键重新开始）
   --reset    --restart 的别名
 USAGE
 }
@@ -94,12 +94,17 @@ IDENTITY_A_FILE="${IDENTITY_A_FILE:-identity_a.md}"
 IDENTITY_B_FILE="${IDENTITY_B_FILE:-identity_b.md}"
 EXPERIENCE_DIR="${EXPERIENCE_DIR:-$STATE_DIR}"
 EXPERIENCE_FILE="${EXPERIENCE_FILE:-experience.md}"
+RL_DIR="${RL_DIR:-$STATE_DIR/rl}"
+RL_POLICY_FILE="${RL_POLICY_FILE:-rl_policy.json}"
+RL_METRICS_FILE="${RL_METRICS_FILE:-rl_metrics.json}"
+RL_HISTORY_FILE="${RL_HISTORY_FILE:-rl_history.jsonl}"
 
 STATE_PATH="$(resolve_path "$STATE_DIR")"
 JOURNAL_PATH="$(resolve_path "$JOURNAL_DIR")"
 LOG_PATH="$(resolve_path "$LOG_DIR")"
 IDENTITY_PATH="$(resolve_path "$IDENTITY_DIR")"
 EXPERIENCE_PATH="$(resolve_path "$EXPERIENCE_DIR")"
+RL_PATH="$(resolve_path "$RL_DIR")"
 
 rm_path() {
   local path="$1"
@@ -125,6 +130,30 @@ clean_dir_contents() {
   fi
 }
 
+clean_dir_contents_except() {
+  local dir="$1"
+  shift
+  local keep_paths=("$@")
+  if [ ! -d "$dir" ]; then
+    return
+  fi
+  if [ "${#keep_paths[@]}" -eq 0 ]; then
+    clean_dir_contents "$dir"
+    return
+  fi
+  local find_expr=()
+  for keep in "${keep_paths[@]}"; do
+    find_expr+=( -path "$keep" -o )
+  done
+  unset 'find_expr[${#find_expr[@]}-1]'
+  if [ "$DRY_RUN" -eq 1 ]; then
+    find "$dir" -mindepth 1 \( "${find_expr[@]}" \) -prune -o -print
+  else
+    find "$dir" -mindepth 1 \( "${find_expr[@]}" \) -prune -o -exec rm -rf {} +
+    echo "cleared $dir (kept experience/rl)"
+  fi
+}
+
 clean_journal() {
   local dir="$1"
   if [ -d "$dir" ]; then
@@ -139,7 +168,12 @@ clean_journal() {
 
 # 运行记录与生成文件
 clean_dir_contents "$LOG_PATH"
-clean_dir_contents "$STATE_PATH"
+clean_dir_contents_except "$STATE_PATH" \
+  "$EXPERIENCE_PATH/$EXPERIENCE_FILE" \
+  "$RL_PATH" \
+  "$RL_PATH/$RL_POLICY_FILE" \
+  "$RL_PATH/$RL_METRICS_FILE" \
+  "$RL_PATH/$RL_HISTORY_FILE"
 clean_journal "$JOURNAL_PATH"
 
 # 上次实验生成的脚本/输出
@@ -157,6 +191,7 @@ if [ "$RESTART_ALL" -eq 1 ]; then
   rm_path "$IDENTITY_PATH/$IDENTITY_A_FILE"
   rm_path "$IDENTITY_PATH/$IDENTITY_B_FILE"
   rm_path "$EXPERIENCE_PATH/$EXPERIENCE_FILE"
+  rm_path "$RL_PATH"
 fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
