@@ -14,7 +14,16 @@ const { buildDebatePrompts } = require("./prompts");
 const { buildDebateFlow, formatStageLengthGuide, getStageLengthGuide, getStageMaxChars } = require("./workflow");
 const { DebateJudge } = require("./judge");
 const { RlPolicy } = require("./rlPolicy");
-const { ensureDir, nowIso, readTail, truncate, safeJsonExtract, formatUtc8 } = require("./utils");
+const {
+  ensureDir,
+  nowIso,
+  readTail,
+  truncate,
+  safeJsonExtract,
+  formatUtc8,
+  countExperienceItems,
+  compressExperienceSection
+} = require("./utils");
 
 function sleep(seconds) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(1, seconds) * 1000));
@@ -114,6 +123,30 @@ function appendAndTrimConversation(base, addition, maxChars) {
   return combined.slice(-maxChars);
 }
 
+function trimTailText(text, maxChars) {
+  if (!text) return "";
+  const raw = String(text).trim();
+  if (!maxChars || raw.length <= maxChars) return raw;
+  return raw.slice(-maxChars).trim();
+}
+
+function splitExperienceSections(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const sections = [];
+  let current = null;
+  for (const line of lines) {
+    if (/^##\s+/.test(line)) {
+      if (current) sections.push(current.join("\n").trim());
+      current = [line];
+      continue;
+    }
+    if (!current) continue;
+    current.push(line);
+  }
+  if (current) sections.push(current.join("\n").trim());
+  return sections.filter(Boolean);
+}
+
 const FALLBACK_TOPICS = [
   "人工智能应否优先用于公共治理而非商业营销？",
   "高校招生应更看重综合素质而非统一考试成绩？",
@@ -148,6 +181,7 @@ class DebateAgent {
     this.currentScores = { A: null, B: null };
     this.cumulativeScores = { A: 0, B: 0 };
     this.evaluatedRounds = 0;
+    this.promptInfo = null;
 
     const experienceDir = config.experienceDir || config.stateDir;
     ensureDir(experienceDir);
@@ -656,7 +690,7 @@ class DebateAgent {
     myScores,
     opponentScores
   }) {
-    const identity = this.readIdentity(identityPath);
+    const identityRaw = this.readIdentity(identityPath);
     const opponentKey = agentKey === "A" ? "B" : "A";
     const rlContext = this.rl?.getPromptContext({
       agentKey,
@@ -665,7 +699,14 @@ class DebateAgent {
       myScores,
       opponentScores
     });
-    const { systemPrompt, userPrompt } = buildDebatePrompts({
+
+    const warnChars = Number(this.config.promptWarnChars || 12000);
+    const maxChars = Number(this.config.promptMaxChars || 15000);
+    let conversationText = trimTailText(conversation || "", this.config.contextMaxChars);
+    let experienceText = trimTailText(experience || "", this.config.experienceMaxChars);
+    let identityText = trimTailText(identityRaw || "", this.config.identityMaxChars);
+
+    const buildPrompt = () => buildDebatePrompts({
       agentKey,
       round,
       debateId,
@@ -679,17 +720,64 @@ class DebateAgent {
       task,
       speakerOrder,
       topic: topic || "",
-      identity,
+      identity: identityText,
       allowIdentityUpdate,
-      experience,
+      experience: experienceText,
       isDebateStart,
       isDebateEnd,
-      conversation,
+      conversation: conversationText,
       evaluation,
       myScores,
       opponentScores,
       rlContext
     });
+
+    let { systemPrompt, userPrompt } = buildPrompt();
+    let promptChars = systemPrompt.length + userPrompt.length;
+    let trimmed = false;
+
+    let guard = 0;
+    while (promptChars > maxChars && guard < 6) {
+      guard += 1;
+      trimmed = true;
+      const overflow = promptChars - maxChars;
+      if (conversationText.length > 420) {
+        const reduce = Math.min(conversationText.length - 420, Math.ceil(overflow * 0.7));
+        conversationText = trimTailText(conversationText, Math.max(420, conversationText.length - reduce));
+      } else if (experienceText.length > 420) {
+        const reduce = Math.min(experienceText.length - 420, Math.ceil(overflow * 0.5));
+        experienceText = trimTailText(experienceText, Math.max(420, experienceText.length - reduce));
+      } else if (identityText.length > 320) {
+        const reduce = Math.min(identityText.length - 320, Math.ceil(overflow * 0.3));
+        identityText = trimTailText(identityText, Math.max(320, identityText.length - reduce));
+      } else {
+        break;
+      }
+      ({ systemPrompt, userPrompt } = buildPrompt());
+      promptChars = systemPrompt.length + userPrompt.length;
+    }
+
+    if (promptChars > warnChars) {
+      this.logger?.warn("prompt.too_long", {
+        agent: agentKey,
+        promptChars,
+        warnChars,
+        maxChars,
+        trimmed
+      });
+      this.log.appendSystemEvent("prompt_warn", `Agent ${agentKey} prompt chars ${promptChars} (warn ${warnChars}, max ${maxChars})`);
+    }
+
+    this.promptInfo = {
+      agent: agentKey,
+      total_chars: promptChars,
+      system_chars: systemPrompt.length,
+      user_chars: userPrompt.length,
+      warn_chars: warnChars,
+      max_chars: maxChars,
+      trimmed,
+      at: nowIso()
+    };
 
     let rawResponse = "";
     let llmUsage = null;
@@ -796,7 +884,8 @@ class DebateAgent {
   readIdentity(identityPath) {
     if (!fs.existsSync(identityPath)) return "";
     try {
-      return fs.readFileSync(identityPath, "utf8").trim();
+      const raw = fs.readFileSync(identityPath, "utf8");
+      return trimTailText(raw, this.config.identityMaxChars);
     } catch (err) {
       return "";
     }
@@ -890,6 +979,7 @@ class DebateAgent {
       sleep_seconds: sleepSeconds,
       token_stats: this.tokenStats,
       api_status: llmStatus,
+      prompt_info: this.promptInfo,
       judge: {
         evaluated_rounds: this.evaluatedRounds,
         current_evaluation: this.currentEvaluation,
@@ -1029,6 +1119,39 @@ class DebateAgent {
     ];
 
     fs.appendFileSync(this.experiencePath, `${rlSection.join("\n")}\n\n`, "utf8");
+
+    this.compressExperienceIfNeeded();
+  }
+
+  compressExperienceIfNeeded() {
+    const threshold = Number(this.config.experienceCompressEvery || 0);
+    if (!threshold) return;
+    if (!fs.existsSync(this.experiencePath)) return;
+
+    const raw = fs.readFileSync(this.experiencePath, "utf8");
+    const itemCount = countExperienceItems(raw);
+    if (itemCount < threshold) return;
+
+    const sections = splitExperienceSections(raw);
+    const keepCount = Math.max(1, Math.min(2, sections.length));
+    const kept = sections.slice(-keepCount).join("\n\n");
+    const summary = compressExperienceSection(
+      raw,
+      this.config.experienceCompressMaxItems || 12,
+      1200
+    );
+    const stamp = formatUtc8();
+    const payload = [
+      `## [${stamp}] 经验压缩（自动）`,
+      summary || "（压缩失败，保留最近记录）",
+      "",
+      kept
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    fs.writeFileSync(this.experiencePath, `${payload}\n\n`, "utf8");
+    this.log.appendEvent("experience_compressed", { itemCount, keptSections: keepCount });
   }
 }
 

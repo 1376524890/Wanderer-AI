@@ -61,6 +61,7 @@ class DebateJudge {
 1. 判定本轮胜方（A/B/tie）
 2. 指出双方的关键亮点（每方最多3条）
 3. 给出改进建议（每方最多3条）
+4. 说明本轮核心对抗点，并给出可操作的提升动作（每方最多2条）
 
 输出严格JSON格式，不要包含任何其他文本。`;
 
@@ -107,6 +108,11 @@ ${replyB || "(无发言)"}
   "suggestions": {
     "A": ["建议1"],
     "B": ["建议1"]
+  },
+  "clash_summary": "本轮核心对抗点一句话",
+  "coaching": {
+    "A": ["可操作提升动作1"],
+    "B": ["可操作提升动作1"]
   }
 }`;
 
@@ -126,14 +132,15 @@ ${replyB || "(无发言)"}
         return JSON.parse(jsonMatch[0]);
       }, this.config.maxRetries, this.config.retryBaseSeconds * 1000);
 
+      const normalized = this.normalizeRoundEvaluation(evaluation);
       this.logger?.info("judge.round.evaluation", {
         round,
-        winner: evaluation.round_winner,
-        avgA: evaluation.averages.A,
-        avgB: evaluation.averages.B
+        winner: normalized.round_winner,
+        avgA: normalized.averages.A,
+        avgB: normalized.averages.B
       });
 
-      return evaluation;
+      return normalized;
     } catch (err) {
       this.logger?.error("judge.round.failed", {
         round,
@@ -169,6 +176,7 @@ ${replyB || "(无发言)"}
 4. 总结双方优点（每方最多5条）
 5. 指出双方不足（每方最多5条）
 6. 给出最终综合评分（每方总分100分）
+7. 提供下一场对抗训练重点（每方最多3条）
 
 评分标准：
 - 90-100分：表现卓越，具有压倒性优势
@@ -209,7 +217,11 @@ ${debateHistory}
     "A": 0,
     "B": 0
   },
-  "overall_comment": "对整场辩论的整体评价（2-3句话）"
+  "overall_comment": "对整场辩论的整体评价（2-3句话）",
+  "training_focus": {
+    "A": ["训练重点1"],
+    "B": ["训练重点1"]
+  }
 }`;
 
     try {
@@ -228,13 +240,14 @@ ${debateHistory}
         return JSON.parse(jsonMatch[0]);
       }, this.config.maxRetries, this.config.retryBaseSeconds * 1000);
 
+      const normalized = this.normalizeDebateEvaluation(finalEvaluation);
       this.logger?.info("judge.debate.evaluation", {
-        winner: finalEvaluation.winner,
-        scoreA: finalEvaluation.final_scores.A,
-        scoreB: finalEvaluation.final_scores.B
+        winner: normalized.winner,
+        scoreA: normalized.final_scores.A,
+        scoreB: normalized.final_scores.B
       });
 
-      return finalEvaluation;
+      return normalized;
     } catch (err) {
       this.logger?.error("judge.debate.failed", {
         error: err?.message || String(err)
@@ -251,7 +264,91 @@ ${debateHistory}
       strengths: { A: [], B: [] },
       weaknesses: { A: [], B: [] },
       final_scores: { A: 50, B: 50 },
-      overall_comment: "评委评估失败，无法给出综合评价。"
+      overall_comment: "评委评估失败，无法给出综合评价。",
+      training_focus: { A: [], B: [] }
+    };
+  }
+
+  normalizeRoundEvaluation(raw) {
+    const fallback = this.getDefaultEvaluation();
+    if (!raw || typeof raw !== "object") return fallback;
+    const normScores = { A: {}, B: {} };
+    const dims = ["logic", "evidence", "responsiveness", "expression", "rule_compliance"];
+    for (const side of ["A", "B"]) {
+      const src = raw.scores && raw.scores[side] ? raw.scores[side] : {};
+      for (const dim of dims) {
+        const value = Number(src[dim]);
+        const safe = Number.isFinite(value) ? Math.min(10, Math.max(1, value)) : 5;
+        normScores[side][dim] = safe;
+      }
+    }
+    const avgA = Number(raw.averages?.A);
+    const avgB = Number(raw.averages?.B);
+    const safeAvgA = Number.isFinite(avgA) ? avgA : dims.reduce((acc, dim) => acc + normScores.A[dim], 0) / dims.length;
+    const safeAvgB = Number.isFinite(avgB) ? avgB : dims.reduce((acc, dim) => acc + normScores.B[dim], 0) / dims.length;
+    let winner = String(raw.round_winner || "").trim();
+    if (!["A", "B", "tie"].includes(winner)) {
+      winner = Math.abs(safeAvgA - safeAvgB) < 0.2 ? "tie" : safeAvgA > safeAvgB ? "A" : "B";
+    }
+
+    const normalizeList = (value, max = 3) => {
+      if (!Array.isArray(value)) return [];
+      return value.map((item) => String(item || "").trim()).filter(Boolean).slice(0, max);
+    };
+
+    return {
+      ...raw,
+      scores: normScores,
+      averages: { A: safeAvgA, B: safeAvgB },
+      round_winner: winner,
+      highlights: {
+        A: normalizeList(raw.highlights?.A),
+        B: normalizeList(raw.highlights?.B)
+      },
+      suggestions: {
+        A: normalizeList(raw.suggestions?.A),
+        B: normalizeList(raw.suggestions?.B)
+      },
+      coaching: {
+        A: normalizeList(raw.coaching?.A, 2),
+        B: normalizeList(raw.coaching?.B, 2)
+      }
+    };
+  }
+
+  normalizeDebateEvaluation(raw) {
+    const fallback = this.getDefaultDebateEvaluation();
+    if (!raw || typeof raw !== "object") return fallback;
+    const winner = ["A", "B", "tie"].includes(raw.winner) ? raw.winner : "tie";
+    const scoreA = Number(raw.final_scores?.A);
+    const scoreB = Number(raw.final_scores?.B);
+    const safeScores = {
+      A: Number.isFinite(scoreA) ? Math.min(100, Math.max(0, scoreA)) : 50,
+      B: Number.isFinite(scoreB) ? Math.min(100, Math.max(0, scoreB)) : 50
+    };
+    const normalizeList = (value, max = 5) => {
+      if (!Array.isArray(value)) return [];
+      return value.map((item) => String(item || "").trim()).filter(Boolean).slice(0, max);
+    };
+    return {
+      ...raw,
+      winner,
+      key_turning_points: Array.isArray(raw.key_turning_points) ? raw.key_turning_points : [],
+      decisive_factors: normalizeList(raw.decisive_factors, 3),
+      strengths: {
+        A: normalizeList(raw.strengths?.A, 5),
+        B: normalizeList(raw.strengths?.B, 5)
+      },
+      weaknesses: {
+        A: normalizeList(raw.weaknesses?.A, 5),
+        B: normalizeList(raw.weaknesses?.B, 5)
+      },
+      final_scores: safeScores,
+      overall_comment: String(raw.overall_comment || fallback.overall_comment),
+      training_focus: {
+        A: normalizeList(raw.training_focus?.A, 3),
+        B: normalizeList(raw.training_focus?.B, 3)
+      }
     };
   }
 }

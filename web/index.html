@@ -134,6 +134,11 @@
                   </div>
                 </div>
                 <div class="card">
+                  <div class="label">Prompt 字符</div>
+                  <div class="value" :class="promptState">{{ promptTotalLabel }}</div>
+                  <div class="mini">{{ promptBreakdown }}</div>
+                </div>
+                <div class="card">
                   <div class="label">请求次数</div>
                   <div class="value">{{ status.token_stats?.requests ?? '-' }}</div>
                 </div>
@@ -186,6 +191,49 @@
                 <div class="judge-stats">
                   <span>已评轮次: {{ status.judge.evaluated_rounds || '-' }}</span>
                   <span>累计总分: A {{ status.judge.cumulative_scores?.A?.toFixed(2) || '-' }} / B {{ status.judge.cumulative_scores?.B?.toFixed(2) || '-' }}</span>
+                </div>
+              </div>
+
+              <div class="status-section" v-if="status.judge?.current_evaluation">
+                <div class="section-title">评委反馈</div>
+                <div class="clash-summary" v-if="status.judge.current_evaluation.clash_summary">
+                  核心对抗点：{{ status.judge.current_evaluation.clash_summary }}
+                </div>
+                <div class="judge-feedback">
+                  <div class="feedback-card">
+                    <div class="judge-title">A 正方</div>
+                    <div class="feedback-block">
+                      <div class="feedback-label">亮点</div>
+                      <ul>
+                        <li v-for="item in (status.judge.current_evaluation.highlights?.A || [])" :key="item">{{ item }}</li>
+                        <li v-if="!(status.judge.current_evaluation.highlights?.A || []).length" class="muted">-</li>
+                      </ul>
+                    </div>
+                    <div class="feedback-block">
+                      <div class="feedback-label">建议</div>
+                      <ul>
+                        <li v-for="item in (status.judge.current_evaluation.coaching?.A || status.judge.current_evaluation.suggestions?.A || [])" :key="item">{{ item }}</li>
+                        <li v-if="!(status.judge.current_evaluation.coaching?.A || status.judge.current_evaluation.suggestions?.A || []).length" class="muted">-</li>
+                      </ul>
+                    </div>
+                  </div>
+                  <div class="feedback-card">
+                    <div class="judge-title">B 反方</div>
+                    <div class="feedback-block">
+                      <div class="feedback-label">亮点</div>
+                      <ul>
+                        <li v-for="item in (status.judge.current_evaluation.highlights?.B || [])" :key="item">{{ item }}</li>
+                        <li v-if="!(status.judge.current_evaluation.highlights?.B || []).length" class="muted">-</li>
+                      </ul>
+                    </div>
+                    <div class="feedback-block">
+                      <div class="feedback-label">建议</div>
+                      <ul>
+                        <li v-for="item in (status.judge.current_evaluation.coaching?.B || status.judge.current_evaluation.suggestions?.B || [])" :key="item">{{ item }}</li>
+                        <li v-if="!(status.judge.current_evaluation.coaching?.B || status.judge.current_evaluation.suggestions?.B || []).length" class="muted">-</li>
+                      </ul>
+                    </div>
+                  </div>
                 </div>
               </div>
 

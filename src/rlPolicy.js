@@ -13,12 +13,15 @@ const DEFAULT_TACTICS = [
   { key: "data_anchor", label: "数据锚定", desc: "引用权威数据并说明统计口径" },
   { key: "causal_chain", label: "因果链条", desc: "建立因果机制并说明边界条件" },
   { key: "counter_example", label: "反例对照", desc: "用反例削弱对方过度泛化" },
+  { key: "assumption_audit", label: "前提审计", desc: "识别对方隐含前提并进行质疑" },
   { key: "definition_lock", label: "定义锁定", desc: "澄清关键词定义，避免偷换概念" },
   { key: "cross_examine", label: "交叉质询", desc: "指出对方证据/逻辑漏洞并追问" },
   { key: "cost_benefit", label: "成本收益", desc: "量化成本、收益与风险权衡" },
   { key: "case_pivot", label: "案例对照", desc: "用对比案例提升说服力" },
+  { key: "mechanism_test", label: "机制检验", desc: "要求对方给出可验证机制或可操作路径" },
   { key: "framework_reframe", label: "框架重述", desc: "重构问题框架，强调己方价值" },
   { key: "priority_tradeoff", label: "价值权衡", desc: "承认代价并给出权衡路径" },
+  { key: "steelman_refute", label: "先强后破", desc: "先概括对方最强论点再精准反驳" },
   { key: "synthesis", label: "综合归纳", desc: "总结要点并回扣核心主张" }
 ];
 

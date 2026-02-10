@@ -9,12 +9,12 @@ const AGENTS = {
   A: {
     name: "正方",
     role: "正方团队",
-    style: "理性、结构化、强调证据、逻辑与论证链"
+    style: "理性、结构化、强调证据、逻辑与论证链，擅长抓住对方漏洞并给出新见解"
   },
   B: {
     name: "反方",
     role: "反方团队",
-    style: "批判、质疑、寻找漏洞并提出反例与替代解释"
+    style: "批判、质疑、寻找漏洞并提出反例与替代解释，善于揭示隐含前提与边界条件"
   }
 };
 
@@ -63,7 +63,9 @@ function buildDebatePrompts({
     const myDetails = (myScores && myScores.details) ? myScores.details : evaluation.scores[agentKey];
     const opponentDetails = (opponentScores && opponentScores.details) ? opponentScores.details : evaluation.scores[opponentKey];
     const mySuggestions = evaluation.suggestions[agentKey] || [];
+    const myCoaching = evaluation.coaching?.[agentKey] || [];
     const opponentHighlights = evaluation.highlights[opponentKey] || [];
+    const combinedSuggestions = [...new Set([...myCoaching, ...mySuggestions])];
 
     evaluationSection = `
 【⚖️ 评委评分（上一轮）】
@@ -77,7 +79,10 @@ function buildDebatePrompts({
 【${agentKey === "A" ? "反方" : "正方"}得分】总分: ${opponentAvg}/10
 
 【评委对你的建议】
-${mySuggestions.map(s => `- ${s}`).join("\n")}
+${combinedSuggestions.length ? combinedSuggestions.map(s => `- ${s}`).join("\n") : "- (无)"}
+
+【本轮核心对抗点】
+${evaluation.clash_summary ? `- ${evaluation.clash_summary}` : "- (未提供)"}
 
 【对方亮点】
 ${opponentHighlights.map(h => `- ${h}`).join("\n")}
@@ -97,6 +102,8 @@ ${opponentHighlights.map(h => `- ${h}`).join("\n")}
     "experience_update 仅在整场辩论结束时填写 1-3 条可执行经验总结，否则必须为空数组。",
     "可见性约束：plan/experience 仅供内部参考，不得在 reply 中直接复述或泄露。",
     "强化学习策略仅供内部参考，不得在 reply 中显式提及策略、权重、奖励或训练细节。",
+    "必须体现互动性：至少回应/概括对方一个核心观点，并给出针对性反驳或追问。",
+    "必须提供一个独特洞见（新角度、边界条件或可检验假设），避免空泛套话。",
     "禁止输出多余文本、禁止 Markdown 代码块。",
     evaluation ? "你必须根据评委评分调整策略，强化优势，改进不足。" : ""
   ].join(" ");
@@ -143,6 +150,11 @@ ${opponentHighlights.map(h => `- ${h}`).join("\n")}
     "系统已配置最大token限制为4096，请确保回复不会超出此限制。",
     evaluation ? "【⚠️ 重要提醒】请根据评委评分和建议，在plan_update中明确改进措施。" : "",
     "",
+    "【互动性要求】",
+    "1) 回应对方最新观点，明确指出1处漏洞或假设。",
+    "2) 给出1条可检验的论证或案例/数据（允许假设场景，但要说明边界）。",
+    "3) 若为提问角色，只提出1个精确问题；若为回答角色，只回答该问题。",
+    "",
     "【共享 experience 文档】",
     experienceText,
     "",
@@ -157,7 +169,8 @@ ${opponentHighlights.map(h => `- ${h}`).join("\n")}
     "2) 严格遵循本轮角色与阶段规则发言，不越权、不抢答。",
     "3) reply 内容与时长匹配；提问者只提 1 个问题，回答者只回应问题。",
     evaluation ? "4) 根据评委评分，在 plan_update 中提供 0-5 条操作，必须包含针对性的改进措施。" : "4) 每轮辩论后都应更新 plan，在 plan_update 中提供 0-5 条操作，细化辩论规划和应对方案。",
-    "5) 若为整场结束，experience_update 必须给出 1-3 条经验总结（强化学习模式：总结可复用的辩论技巧和策略）。",
+    "5) plan_update 至少包含 1 条与对抗互动/技巧学习相关的可执行动作。",
+    "6) 若为整场结束，experience_update 必须给出 1-3 条经验总结（强化学习模式：总结可复用的辩论技巧和策略）。",
     "",
     "【plan_update 操作格式】",
     "- 对象：{ \"op\": \"add\", \"text\": \"...\" }",

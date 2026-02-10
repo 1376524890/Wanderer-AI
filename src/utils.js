@@ -40,7 +40,8 @@ function truncate(text, maxChars) {
 function readTail(filePath, maxChars) {
   if (!fs.existsSync(filePath)) return "";
   const data = fs.readFileSync(filePath, "utf8");
-  return truncate(data, maxChars);
+  if (!maxChars || data.length <= maxChars) return data;
+  return data.slice(-maxChars);
 }
 
 function safeJsonExtract(raw) {
@@ -58,6 +59,44 @@ function safeJsonExtract(raw) {
   } catch (err) {
     return null;
   }
+}
+
+function safeSnippet(text, maxChars) {
+  if (!text) return "";
+  const trimmed = String(text).trim();
+  if (!maxChars || trimmed.length <= maxChars) return trimmed;
+  return trimmed.slice(0, Math.max(0, maxChars - 3)) + "...";
+}
+
+function countExperienceItems(text) {
+  if (!text) return 0;
+  return String(text)
+    .split(/\r?\n/)
+    .filter((line) => /^\s*-\s*[AB]\s*:/.test(line)).length;
+}
+
+function compressExperienceSection(text, maxItems = 10, maxChars = 900) {
+  if (!text) return "";
+  const lines = String(text).split(/\r?\n/);
+  const summaryLines = [];
+  const bullets = [];
+
+  for (const line of lines) {
+    if (/^\s*-\s*[AB]\s*:/.test(line)) {
+      bullets.push(line.replace(/^\s*-\s+/, "").trim());
+    } else if (line.trim()) {
+      if (summaryLines.length < 3) summaryLines.push(line.trim());
+    }
+  }
+
+  const picked = bullets.slice(-Math.max(1, maxItems));
+  const summary = [
+    "【经验压缩摘要】",
+    summaryLines.length ? summaryLines.join(" | ") : "综合本段经验要点，保留可执行策略。",
+    ...picked.map((item, index) => `- (${index + 1}) ${item}`)
+  ].join("\n");
+
+  return safeSnippet(summary, maxChars);
 }
 
 function formatUtc8(date = new Date()) {
@@ -81,5 +120,8 @@ module.exports = {
   truncate,
   readTail,
   safeJsonExtract,
+  safeSnippet,
+  countExperienceItems,
+  compressExperienceSection,
   formatUtc8
 };

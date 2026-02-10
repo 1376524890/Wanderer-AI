@@ -51,6 +51,32 @@ createApp({
       );
     });
 
+    const promptInfo = computed(() => status.value.prompt_info || {});
+
+    const promptState = computed(() => {
+      const info = promptInfo.value;
+      if (!info.total_chars) return "";
+      if (info.max_chars && info.total_chars >= info.max_chars) return "fail";
+      if (info.warn_chars && info.total_chars >= info.warn_chars) return "warn";
+      return "ok";
+    });
+
+    const promptTotalLabel = computed(() => {
+      const info = promptInfo.value;
+      if (!info.total_chars) return "-";
+      const max = info.max_chars ? formatNumber(info.max_chars) : "-";
+      return `${formatNumber(info.total_chars)} / ${max}`;
+    });
+
+    const promptBreakdown = computed(() => {
+      const info = promptInfo.value;
+      if (!info.total_chars) return "";
+      const systemChars = info.system_chars ? formatNumber(info.system_chars) : "-";
+      const userChars = info.user_chars ? formatNumber(info.user_chars) : "-";
+      const trimmed = info.trimmed ? "已压缩" : "未压缩";
+      return `system ${systemChars} · user ${userChars} · ${trimmed}`;
+    });
+
     const filteredEntries = computed(() => {
       const keyword = filterText.value.trim().toLowerCase();
       if (!keyword) return entries.value;
@@ -266,6 +292,10 @@ createApp({
       apiStatusLabel,
       apiStatusClass,
       lastError,
+      promptInfo,
+      promptState,
+      promptTotalLabel,
+      promptBreakdown,
       filteredEntries,
       scrollToBottom,
       loadEarlier,
