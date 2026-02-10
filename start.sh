@@ -29,10 +29,39 @@ npm install
 
 STATE_DIR=$(grep -m1 "^STATE_DIR=" .env 2>/dev/null | cut -d= -f2- || true)
 LOG_DIR=$(grep -m1 "^LOG_DIR=" .env 2>/dev/null | cut -d= -f2- || true)
+SKILLS_PATH=$(grep -m1 "^SKILLS_PATH=" .env 2>/dev/null | cut -d= -f2- || true)
 STATE_DIR="${STATE_DIR:-state}"
 LOG_DIR="${LOG_DIR:-logs}"
+SKILLS_PATH="${SKILLS_PATH:-$STATE_DIR/skills.json}"
 
 mkdir -p "$STATE_DIR" "$LOG_DIR"
+
+if [ ! -f "$SKILLS_PATH" ]; then
+  echo "未检测到 skills.json，正在初始化: $SKILLS_PATH"
+  mkdir -p "$(dirname "$SKILLS_PATH")"
+  if [ -f "$ROOT_DIR/state/skills.json" ]; then
+    cp "$ROOT_DIR/state/skills.json" "$SKILLS_PATH"
+  else
+    cat > "$SKILLS_PATH" <<'JSON'
+{
+  "A": {
+    "pressure_awareness": 0.6,
+    "commitment": 0.6,
+    "aggression": 0.6,
+    "recovery": 0.6,
+    "evidence_control": 0.5
+  },
+  "B": {
+    "pressure_awareness": 0.6,
+    "commitment": 0.6,
+    "aggression": 0.6,
+    "recovery": 0.6,
+    "evidence_control": 0.5
+  }
+}
+JSON
+  fi
+fi
 
 echo "后台启动辩论引擎与 Web UI..."
 nohup node run-agent.js >"$LOG_DIR/agent.out" 2>&1 &

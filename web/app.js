@@ -271,6 +271,26 @@ createApp({
       return String(num);
     }
 
+    function formatReward(signal) {
+      if (!signal) return "-";
+      const reward = Number(signal.reward || 0);
+      const penalty = Number(signal.penalty || 0);
+      const total = reward - penalty;
+      return Number.isFinite(total) ? total.toFixed(2) : "-";
+    }
+
+    function formatPercent(value) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return "-";
+      return `${Math.round(num * 100)}%`;
+    }
+
+    function formatSkill(value) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return "-";
+      return num.toFixed(2);
+    }
+
     onMounted(() => {
       connectStream();
     });
@@ -301,7 +321,10 @@ createApp({
       loadEarlier,
       onScroll,
       refreshOnce,
-      formatNumber
+      formatNumber,
+      formatReward,
+      formatPercent,
+      formatSkill
     };
   }
 }).mount("#app");

@@ -3,36 +3,36 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Wanderer AI Debate · Control Room</title>
+    <title>Wanderer AI Debate · Arena Monitor</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
     <div id="app">
-      <div class="app-shell">
+      <div class="shell">
         <header class="topbar">
           <div class="brand">
-            <span class="logo-dot"></span>
-            <div>
+            <span class="brand-dot"></span>
+            <div class="brand-text">
               <div class="title">Wanderer AI Debate</div>
-              <div class="subtitle">实时辩论监控 · Web Control Room</div>
+              <div class="subtitle">Arena Monitor · 状态机 × 强化学习</div>
             </div>
           </div>
-          <div class="connection">
-            <span class="pill" :class="connection.state">{{ connectionLabel }}</span>
-            <span class="time">{{ statusTime }}</span>
+          <div class="topbar-right">
+            <div class="pill" :class="connection.state">{{ connectionLabel }}</div>
+            <div class="time">{{ statusTime }}</div>
           </div>
         </header>
 
-        <main class="grid">
+        <main class="layout">
           <section class="panel conversation">
-              <div class="panel-header">
-                <div>
-                  <div class="panel-title">
-                    对话流
-                    <span class="current-topic-badge" v-if="status.topic">{{ status.topic }}</span>
-                  </div>
-                  <div class="panel-sub">实时捕捉最新辩论内容，支持自动翻页与搜索</div>
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">
+                  对话流
+                  <span class="badge" v-if="status.topic">{{ status.topic }}</span>
                 </div>
+                <div class="panel-sub">实时对话 · 支持搜索与自动翻页</div>
+              </div>
               <div class="panel-actions">
                 <input class="input" v-model="filterText" placeholder="搜索关键词" />
                 <label class="toggle">
@@ -43,7 +43,7 @@
                   <input type="checkbox" v-model="autoPage" />
                   自动翻页
                 </label>
-                <button class="btn" @click="scrollToBottom">跳到底部</button>
+                <button class="btn ghost" @click="scrollToBottom">跳到底部</button>
               </div>
             </div>
 
@@ -54,12 +54,7 @@
                 </button>
               </div>
               <div class="empty" v-if="!filteredEntries.length">暂无对话</div>
-              <div
-                class="entry"
-                v-for="entry in filteredEntries"
-                :key="entry.id"
-                :class="entry.type"
-              >
+              <div class="entry" v-for="entry in filteredEntries" :key="entry.id" :class="entry.type">
                 <template v-if="entry.type === 'round'">
                   <div class="round-chip">Round {{ entry.round || '-' }}</div>
                   <div class="round-title">{{ entry.title }}</div>
@@ -80,178 +75,204 @@
             </div>
           </section>
 
-          <aside class="panel status">
+          <aside class="panel sidebar">
             <div class="panel-header">
               <div>
-                <div class="panel-title">系统状态</div>
-                <div class="panel-sub">运行参数、API 健康与 token 消耗</div>
+                <div class="panel-title">监控总览</div>
+                <div class="panel-sub">状态机 · 强化学习 · 评委反馈</div>
               </div>
               <div class="panel-actions">
                 <button class="btn ghost" @click="refreshOnce">手动刷新</button>
               </div>
             </div>
 
-            <div class="status-scroll">
-              <div class="status-grid">
-                <div class="card">
-                  <div class="label">主题</div>
-                  <div class="value">{{ status.topic || '-' }}</div>
-                </div>
-                <div class="card">
-                  <div class="label">当前阶段</div>
-                  <div class="value">{{ status.debate_stage || '-' }}</div>
-                </div>
-                <div class="card">
-                  <div class="label">轮次</div>
-                  <div class="value">{{ status.round ?? '-' }}</div>
-                </div>
-                <div class="card">
-                  <div class="label">辩论轮次</div>
-                  <div class="value">{{ status.debate_round ?? '-' }} / {{ status.debate_total_rounds ?? '-' }}</div>
-                </div>
-                <div class="card">
-                  <div class="label">上次回复</div>
-                  <div class="value">{{ status.last_reply_at || '-' }}</div>
-                </div>
-                <div class="card">
-                  <div class="label">A 平均分</div>
-                  <div class="value">{{ status.judge?.average_scores?.A ? status.judge.average_scores.A.toFixed(2) : '-' }}</div>
-                </div>
-                <div class="card">
-                  <div class="label">API 状态</div>
-                  <div class="value" :class="apiStatusClass">
-                    {{ apiStatusLabel }}
+            <div class="sidebar-scroll">
+              <section class="card">
+                <div class="card-title">实时概览</div>
+                <div class="grid-two">
+                  <div>
+                    <div class="label">主题</div>
+                    <div class="value">{{ status.topic || '-' }}</div>
+                  </div>
+                  <div>
+                    <div class="label">阶段</div>
+                    <div class="value">{{ status.debate_stage || '-' }}</div>
+                  </div>
+                  <div>
+                    <div class="label">轮次</div>
+                    <div class="value">{{ status.round ?? '-' }}</div>
+                  </div>
+                  <div>
+                    <div class="label">赛程</div>
+                    <div class="value">{{ status.debate_round ?? '-' }} / {{ status.debate_total_rounds ?? '-' }}</div>
+                  </div>
+                  <div>
+                    <div class="label">Curriculum</div>
+                    <div class="value">Phase {{ status.curriculum_phase ?? '-' }}</div>
+                  </div>
+                  <div>
+                    <div class="label">当前胜方</div>
+                    <div class="value">{{ status.judge?.overall_winner === 'A' ? '正方 A' : status.judge?.overall_winner === 'B' ? '反方 B' : status.judge?.overall_winner === 'tie' ? '平局' : '-' }}</div>
                   </div>
                 </div>
-                <div class="card">
-                  <div class="label">B 平均分</div>
-                  <div class="value">{{ status.judge?.average_scores?.B ? status.judge.average_scores.B.toFixed(2) : '-' }}</div>
-                </div>
-                <div class="card">
-                  <div class="label">Token 总量</div>
-                  <div class="value">
-                    {{ status.token_stats?.total_tokens ? formatNumber(status.token_stats.total_tokens) : '-' }}
-                  </div>
-                </div>
-                <div class="card">
-                  <div class="label">Prompt 字符</div>
-                  <div class="value" :class="promptState">{{ promptTotalLabel }}</div>
-                  <div class="mini">{{ promptBreakdown }}</div>
-                </div>
-                <div class="card">
-                  <div class="label">请求次数</div>
-                  <div class="value">{{ status.token_stats?.requests ?? '-' }}</div>
-                </div>
-                <div class="card wide">
-                  <div class="label">阶段规则</div>
-                  <div class="value">{{ status.debate_stage_rule || '-' }}</div>
-                </div>
-                <div class="card wide">
-                  <div class="label">字数指导</div>
-                  <div class="value">{{ status.debate_stage_length || '-' }}</div>
-                </div>
-                <div class="card wide" v-if="lastError">
-                  <div class="label">最近错误</div>
-                  <div class="value error">{{ lastError }}</div>
-                </div>
-                <div class="card wide" v-if="status.judge?.overall_winner">
-                  <div class="label">当前胜方</div>
-                  <div class="value">{{ status.judge.overall_winner === 'A' ? '✅ 正方 A' : status.judge.overall_winner === 'B' ? '✅ 反方 B' : '🤝 平局' }}</div>
-                </div>
-              </div>
+              </section>
 
-              <div class="status-section" v-if="status.judge?.current_evaluation">
-                <div class="section-title">本轮评分</div>
+              <section class="card">
+                <div class="card-title">对抗状态 & 奖励</div>
+                <div class="state-grid">
+                  <div class="state-card">
+                    <div class="state-title">A 正方</div>
+                    <div class="state-row"><span>状态</span><strong>{{ status.judge?.debate_states?.A || '-' }}</strong></div>
+                    <div class="state-row"><span>动作</span><strong>{{ status.judge?.detected_actions?.A || '-' }}</strong></div>
+                    <div class="state-row"><span>奖励</span><strong>{{ formatReward(status.judge?.reward_signals?.A) }}</strong></div>
+                    <div class="state-row"><span>Intent</span><strong>{{ status.rl_status?.A?.last_intent || '-' }}</strong></div>
+                    <div class="focus-list" v-if="status.rl_status?.A?.focus?.length">
+                      <div class="focus-item" v-for="item in status.rl_status.A.focus" :key="item.key">
+                        <span>{{ item.label }}</span>
+                        <strong>{{ item.weight }}</strong>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="state-card">
+                    <div class="state-title">B 反方</div>
+                    <div class="state-row"><span>状态</span><strong>{{ status.judge?.debate_states?.B || '-' }}</strong></div>
+                    <div class="state-row"><span>动作</span><strong>{{ status.judge?.detected_actions?.B || '-' }}</strong></div>
+                    <div class="state-row"><span>奖励</span><strong>{{ formatReward(status.judge?.reward_signals?.B) }}</strong></div>
+                    <div class="state-row"><span>Intent</span><strong>{{ status.rl_status?.B?.last_intent || '-' }}</strong></div>
+                    <div class="focus-list" v-if="status.rl_status?.B?.focus?.length">
+                      <div class="focus-item" v-for="item in status.rl_status.B.focus" :key="item.key">
+                        <span>{{ item.label }}</span>
+                        <strong>{{ item.weight }}</strong>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="mini">
+                  Reward Mix: Debate {{ formatPercent(status.reward_mix?.debate_weight) }} · Judge {{ formatPercent(status.reward_mix?.judge_weight) }}
+                </div>
+              </section>
+
+              <section class="card">
+                <div class="card-title">技能档案</div>
+                <div class="skills-grid">
+                  <div class="skills-card">
+                    <div class="state-title">A 正方</div>
+                    <div class="skill-row" v-for="(value, key) in (status.skills?.A || {})" :key="key">
+                      <span>{{ key }}</span>
+                      <strong>{{ formatSkill(value) }}</strong>
+                    </div>
+                  </div>
+                  <div class="skills-card">
+                    <div class="state-title">B 反方</div>
+                    <div class="skill-row" v-for="(value, key) in (status.skills?.B || {})" :key="key">
+                      <span>{{ key }}</span>
+                      <strong>{{ formatSkill(value) }}</strong>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="card" v-if="status.judge?.current_evaluation">
+                <div class="card-title">评委评分</div>
                 <div class="judge-grid">
                   <div class="judge-card">
                     <div class="judge-title">A 正方</div>
-                    <div class="judge-winner" v-if="status.judge.current_evaluation.round_winner === 'A'">🏆</div>
-                    <div class="judge-scores">
-                      <div class="score-row"><span class="score-label">逻辑</span><span class="score-value">{{ status.judge.current_evaluation.scores?.A?.logic || '-' }}</span></div>
-                      <div class="score-row"><span class="score-label">证据</span><span class="score-value">{{ status.judge.current_evaluation.scores?.A?.evidence || '-' }}</span></div>
-                      <div class="score-row"><span class="score-label">反应</span><span class="score-value">{{ status.judge.current_evaluation.scores?.A?.responsiveness || '-' }}</span></div>
-                      <div class="score-row"><span class="score-label">表达</span><span class="score-value">{{ status.judge.current_evaluation.scores?.A?.expression || '-' }}</span></div>
-                      <div class="score-row"><span class="score-label">规则</span><span class="score-value">{{ status.judge.current_evaluation.scores?.A?.rule_compliance || '-' }}</span></div>
+                    <div class="judge-score">平均 {{ status.judge.current_evaluation.averages?.A?.toFixed(2) || '-' }}</div>
+                    <div class="judge-metrics">
+                      <div><span>逻辑</span><strong>{{ status.judge.current_evaluation.scores?.A?.logic || '-' }}</strong></div>
+                      <div><span>证据</span><strong>{{ status.judge.current_evaluation.scores?.A?.evidence || '-' }}</strong></div>
+                      <div><span>反应</span><strong>{{ status.judge.current_evaluation.scores?.A?.responsiveness || '-' }}</strong></div>
+                      <div><span>表达</span><strong>{{ status.judge.current_evaluation.scores?.A?.expression || '-' }}</strong></div>
+                      <div><span>规则</span><strong>{{ status.judge.current_evaluation.scores?.A?.rule_compliance || '-' }}</strong></div>
                     </div>
-                    <div class="judge-avg">平均: {{ status.judge.current_evaluation.averages?.A?.toFixed(2) || '-' }}</div>
                   </div>
                   <div class="judge-card">
                     <div class="judge-title">B 反方</div>
-                    <div class="judge-winner" v-if="status.judge.current_evaluation.round_winner === 'B'">🏆</div>
-                    <div class="judge-scores">
-                      <div class="score-row"><span class="score-label">逻辑</span><span class="score-value">{{ status.judge.current_evaluation.scores?.B?.logic || '-' }}</span></div>
-                      <div class="score-row"><span class="score-label">证据</span><span class="score-value">{{ status.judge.current_evaluation.scores?.B?.evidence || '-' }}</span></div>
-                      <div class="score-row"><span class="score-label">反应</span><span class="score-value">{{ status.judge.current_evaluation.scores?.B?.responsiveness || '-' }}</span></div>
-                      <div class="score-row"><span class="score-label">表达</span><span class="score-value">{{ status.judge.current_evaluation.scores?.B?.expression || '-' }}</span></div>
-                      <div class="score-row"><span class="score-label">规则</span><span class="score-value">{{ status.judge.current_evaluation.scores?.B?.rule_compliance || '-' }}</span></div>
+                    <div class="judge-score">平均 {{ status.judge.current_evaluation.averages?.B?.toFixed(2) || '-' }}</div>
+                    <div class="judge-metrics">
+                      <div><span>逻辑</span><strong>{{ status.judge.current_evaluation.scores?.B?.logic || '-' }}</strong></div>
+                      <div><span>证据</span><strong>{{ status.judge.current_evaluation.scores?.B?.evidence || '-' }}</strong></div>
+                      <div><span>反应</span><strong>{{ status.judge.current_evaluation.scores?.B?.responsiveness || '-' }}</strong></div>
+                      <div><span>表达</span><strong>{{ status.judge.current_evaluation.scores?.B?.expression || '-' }}</strong></div>
+                      <div><span>规则</span><strong>{{ status.judge.current_evaluation.scores?.B?.rule_compliance || '-' }}</strong></div>
                     </div>
-                    <div class="judge-avg">平均: {{ status.judge.current_evaluation.averages?.B?.toFixed(2) || '-' }}</div>
                   </div>
                 </div>
-                <div class="judge-stats">
-                  <span>已评轮次: {{ status.judge.evaluated_rounds || '-' }}</span>
-                  <span>累计总分: A {{ status.judge.cumulative_scores?.A?.toFixed(2) || '-' }} / B {{ status.judge.cumulative_scores?.B?.toFixed(2) || '-' }}</span>
-                </div>
-              </div>
-
-              <div class="status-section" v-if="status.judge?.current_evaluation">
-                <div class="section-title">评委反馈</div>
-                <div class="clash-summary" v-if="status.judge.current_evaluation.clash_summary">
+                <div class="clash" v-if="status.judge.current_evaluation.clash_summary">
                   核心对抗点：{{ status.judge.current_evaluation.clash_summary }}
                 </div>
-                <div class="judge-feedback">
+                <div class="feedback-grid">
                   <div class="feedback-card">
-                    <div class="judge-title">A 正方</div>
-                    <div class="feedback-block">
-                      <div class="feedback-label">亮点</div>
-                      <ul>
-                        <li v-for="item in (status.judge.current_evaluation.highlights?.A || [])" :key="item">{{ item }}</li>
-                        <li v-if="!(status.judge.current_evaluation.highlights?.A || []).length" class="muted">-</li>
-                      </ul>
-                    </div>
-                    <div class="feedback-block">
-                      <div class="feedback-label">建议</div>
-                      <ul>
-                        <li v-for="item in (status.judge.current_evaluation.coaching?.A || status.judge.current_evaluation.suggestions?.A || [])" :key="item">{{ item }}</li>
-                        <li v-if="!(status.judge.current_evaluation.coaching?.A || status.judge.current_evaluation.suggestions?.A || []).length" class="muted">-</li>
-                      </ul>
-                    </div>
+                    <div class="feedback-title">A 亮点/建议</div>
+                    <ul>
+                      <li v-for="item in (status.judge.current_evaluation.highlights?.A || [])" :key="item">{{ item }}</li>
+                      <li v-if="!(status.judge.current_evaluation.highlights?.A || []).length" class="muted">-</li>
+                    </ul>
+                    <ul>
+                      <li v-for="item in (status.judge.current_evaluation.coaching?.A || status.judge.current_evaluation.suggestions?.A || [])" :key="item">{{ item }}</li>
+                      <li v-if="!(status.judge.current_evaluation.coaching?.A || status.judge.current_evaluation.suggestions?.A || []).length" class="muted">-</li>
+                    </ul>
                   </div>
                   <div class="feedback-card">
-                    <div class="judge-title">B 反方</div>
-                    <div class="feedback-block">
-                      <div class="feedback-label">亮点</div>
-                      <ul>
-                        <li v-for="item in (status.judge.current_evaluation.highlights?.B || [])" :key="item">{{ item }}</li>
-                        <li v-if="!(status.judge.current_evaluation.highlights?.B || []).length" class="muted">-</li>
-                      </ul>
-                    </div>
-                    <div class="feedback-block">
-                      <div class="feedback-label">建议</div>
-                      <ul>
-                        <li v-for="item in (status.judge.current_evaluation.coaching?.B || status.judge.current_evaluation.suggestions?.B || [])" :key="item">{{ item }}</li>
-                        <li v-if="!(status.judge.current_evaluation.coaching?.B || status.judge.current_evaluation.suggestions?.B || []).length" class="muted">-</li>
-                      </ul>
-                    </div>
+                    <div class="feedback-title">B 亮点/建议</div>
+                    <ul>
+                      <li v-for="item in (status.judge.current_evaluation.highlights?.B || [])" :key="item">{{ item }}</li>
+                      <li v-if="!(status.judge.current_evaluation.highlights?.B || []).length" class="muted">-</li>
+                    </ul>
+                    <ul>
+                      <li v-for="item in (status.judge.current_evaluation.coaching?.B || status.judge.current_evaluation.suggestions?.B || [])" :key="item">{{ item }}</li>
+                      <li v-if="!(status.judge.current_evaluation.coaching?.B || status.judge.current_evaluation.suggestions?.B || []).length" class="muted">-</li>
+                    </ul>
                   </div>
                 </div>
-              </div>
+              </section>
 
-              <div class="identity-grid">
-                <div class="card identity">
+              <section class="card">
+                <div class="card-title">系统健康 & Prompt</div>
+                <div class="grid-two">
+                  <div>
+                    <div class="label">API</div>
+                    <div class="value" :class="apiStatusClass">{{ apiStatusLabel }}</div>
+                  </div>
+                  <div>
+                    <div class="label">上次回复</div>
+                    <div class="value">{{ status.last_reply_at || '-' }}</div>
+                  </div>
+                  <div>
+                    <div class="label">Token 总量</div>
+                    <div class="value">{{ status.token_stats?.total_tokens ? formatNumber(status.token_stats.total_tokens) : '-' }}</div>
+                  </div>
+                  <div>
+                    <div class="label">请求次数</div>
+                    <div class="value">{{ status.token_stats?.requests ?? '-' }}</div>
+                  </div>
+                  <div>
+                    <div class="label">Prompt 字符</div>
+                    <div class="value" :class="promptState">{{ promptTotalLabel }}</div>
+                  </div>
+                  <div>
+                    <div class="label">Prompt 拆分</div>
+                    <div class="value">{{ promptBreakdown || '-' }}</div>
+                  </div>
+                </div>
+                <div class="error" v-if="lastError">{{ lastError }}</div>
+              </section>
+
+              <section class="card">
+                <div class="card-title">Plan & Experience</div>
+                <div class="text-block">
                   <div class="label">Agent A Plan</div>
                   <pre>{{ identities.identityA || "(空)" }}</pre>
                 </div>
-                <div class="card identity">
+                <div class="text-block">
                   <div class="label">Agent B Plan</div>
                   <pre>{{ identities.identityB || "(空)" }}</pre>
                 </div>
-              </div>
-
-              <div class="card experience">
-                <div class="label">Experience (经验总结)</div>
-                <pre>{{ experience || "(空)" }}</pre>
-              </div>
+                <div class="text-block">
+                  <div class="label">Experience</div>
+                  <pre>{{ experience || "(空)" }}</pre>
+                </div>
+              </section>
             </div>
           </aside>
         </main>

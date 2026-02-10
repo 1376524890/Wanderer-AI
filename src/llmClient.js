@@ -79,6 +79,12 @@ class LlmClient {
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const promptChars = (systemPrompt?.length || 0) + (userPrompt?.length || 0);
     const model = options.model || this.config.vllmModel;
+    const requestOptions = {
+      temperature: Number.isFinite(options.temperature) ? options.temperature : undefined,
+      topP: Number.isFinite(options.topP) ? options.topP : undefined,
+      maxTokens: Number.isFinite(options.maxTokens) ? options.maxTokens : undefined,
+      extraBody: options.extraBody
+    };
 
     this.status.retrying = false;
     this.status.last_retry_at = null;
@@ -94,7 +100,7 @@ class LlmClient {
 
     try {
       const startAt = Date.now();
-      const response = await this.chatWithRetry(systemPrompt, userPrompt, requestId, model);
+      const response = await this.chatWithRetry(systemPrompt, userPrompt, requestId, model, requestOptions);
       const ms = Date.now() - startAt;
 
       this.status.ok = true;
@@ -133,24 +139,35 @@ class LlmClient {
     }
   }
 
-  async chatWithRetry(systemPrompt, userPrompt, requestId, model) {
+  async chatWithRetry(systemPrompt, userPrompt, requestId, model, options = {}) {
     let attempt = 0;
     const maxAttempts = this.config.maxRetries;
 
     while (true) {
       try {
+        const temperature = Number.isFinite(options.temperature)
+          ? options.temperature
+          : this.config.temperature;
+        const topP = Number.isFinite(options.topP)
+          ? options.topP
+          : this.config.topP;
+        const maxTokens = Number.isFinite(options.maxTokens)
+          ? options.maxTokens
+          : this.config.maxTokens;
         const payload = {
           model: model || this.config.vllmModel,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt }
           ],
-          temperature: this.config.temperature,
-          top_p: this.config.topP,
-          max_tokens: this.config.maxTokens
+          temperature,
+          top_p: topP,
+          max_tokens: maxTokens
         };
 
-        if (this.config.openaiExtraBody && Object.keys(this.config.openaiExtraBody).length > 0) {
+        if (options.extraBody && Object.keys(options.extraBody).length > 0) {
+          payload.extra_body = options.extraBody;
+        } else if (this.config.openaiExtraBody && Object.keys(this.config.openaiExtraBody).length > 0) {
           payload.extra_body = this.config.openaiExtraBody;
         }
 

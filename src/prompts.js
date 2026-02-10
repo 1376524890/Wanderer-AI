@@ -110,6 +110,7 @@ ${opponentHighlights.map(h => `- ${h}`).join("\n")}
 
   const rlSection = rlContext ? [
     "【强化学习策略】",
+    rlContext.intent ? `本轮意图（必须体现在发言中，不要在 reply 中显式说明）：${rlContext.intent.label} - ${rlContext.intent.desc}` : "本轮意图：（无）",
     "策略动作（必须落实到本轮发言）：",
     ...((rlContext.actions || []).length
       ? rlContext.actions.map((item) => `- ${item.label}: ${item.desc}`)

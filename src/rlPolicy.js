@@ -8,6 +8,7 @@
 const fs = require("fs");
 const path = require("path");
 const { ensureDir, nowIso } = require("./utils");
+const { ACTIONS } = require("./debateDynamics");
 
 const DEFAULT_TACTICS = [
   { key: "data_anchor", label: "数据锚定", desc: "引用权威数据并说明统计口径" },
@@ -24,6 +25,20 @@ const DEFAULT_TACTICS = [
   { key: "steelman_refute", label: "先强后破", desc: "先概括对方最强论点再精准反驳" },
   { key: "synthesis", label: "综合归纳", desc: "总结要点并回扣核心主张" }
 ];
+
+const INTENTS = [
+  { key: "AttackClaim", label: "攻击主张", desc: "针对对方核心主张进行反驳" },
+  { key: "AttackEvidence", label: "攻击证据", desc: "质疑数据、案例或证据来源" },
+  { key: "ForceClarification", label: "强迫澄清", desc: "要求对方给出定义或Yes/No回答" },
+  { key: "Deflect", label: "回避转移", desc: "转移话题或规避直接回答" },
+  { key: "ConcedePartial", label: "部分让步", desc: "承认对方部分观点但保留立场" },
+  { key: "Reframe", label: "重构框架", desc: "重新定义问题边界或讨论框架" },
+  { key: "CounterQuestion", label: "反问反制", desc: "以反问将压力转回对方" },
+  { key: "SummarizePressure", label: "总结压力", desc: "指出对方未回应或漏洞" },
+  { key: "IntroduceNewClaim", label: "引入新主张", desc: "提出新的论点或角度" }
+];
+
+const INTENT_KEYS = ACTIONS && ACTIONS.length ? ACTIONS : INTENTS.map((item) => item.key);
 
 const FOCUS_DIMS = [
   { key: "logic", label: "逻辑性" },
@@ -115,6 +130,9 @@ function buildDefaultAgentState(tactics) {
   const uniform = 1 / tactics.length;
   const tactic_probs = {};
   for (const tactic of tactics) tactic_probs[tactic.key] = uniform;
+  const intent_probs = {};
+  const intentUniform = 1 / INTENT_KEYS.length;
+  for (const key of INTENT_KEYS) intent_probs[key] = intentUniform;
   const focus = {};
   for (const dim of FOCUS_DIMS) focus[dim.key] = 1;
   return {
@@ -124,8 +142,10 @@ function buildDefaultAgentState(tactics) {
     last_reward: 0,
     last_advantage: 0,
     tactic_probs,
+    intent_probs,
     focus,
     last_actions: [],
+    last_intent: null,
     last_update: null
   };
 }
@@ -135,6 +155,16 @@ function mergeTactics(existing, tactics, minProb) {
   for (const tactic of tactics) {
     if (!Object.prototype.hasOwnProperty.call(probs, tactic.key)) {
       probs[tactic.key] = minProb;
+    }
+  }
+  return normalizeProbs(probs, minProb);
+}
+
+function mergeIntents(existing, intents, minProb) {
+  const probs = { ...(existing || {}) };
+  for (const key of intents) {
+    if (!Object.prototype.hasOwnProperty.call(probs, key)) {
+      probs[key] = minProb;
     }
   }
   return normalizeProbs(probs, minProb);
@@ -207,6 +237,8 @@ class RlPolicy {
       };
       merged.agents.A.tactic_probs = mergeTactics(merged.agents.A.tactic_probs, this.tactics, minProb);
       merged.agents.B.tactic_probs = mergeTactics(merged.agents.B.tactic_probs, this.tactics, minProb);
+      merged.agents.A.intent_probs = mergeIntents(merged.agents.A.intent_probs, INTENT_KEYS, minProb);
+      merged.agents.B.intent_probs = mergeIntents(merged.agents.B.intent_probs, INTENT_KEYS, minProb);
       return merged;
     } catch (err) {
       this.logger?.error("rl.state.load_failed", { error: err.message || String(err) });
@@ -314,9 +346,29 @@ class RlPolicy {
     return actions;
   }
 
+  selectIntent(round, agentKey) {
+    if (!this.enabled) return null;
+    this.ensureRound(round);
+    const agentState = this.state.agents[agentKey];
+    if (!agentState) return null;
+    if (agentState.last_intent && agentState.last_intent.round === round) {
+      return agentState.last_intent.key;
+    }
+    const probs = agentState.intent_probs || {};
+    const keys = Object.keys(probs);
+    if (!keys.length) return null;
+    const explore = Math.random() < (this.config.rlExploration ?? 0.1);
+    const pickKey = explore
+      ? keys[Math.floor(Math.random() * keys.length)]
+      : pickWeighted(keys, probs);
+    agentState.last_intent = { key: pickKey, round };
+    return pickKey;
+  }
+
   getPromptContext({ agentKey, opponentKey, round, myScores, opponentScores }) {
     if (!this.enabled) return null;
     const actions = this.selectActions(round, agentKey);
+    const intentKey = this.selectIntent(round, agentKey);
     const agentState = this.state.agents[agentKey];
     const focus = agentState?.focus || {};
     const focusSorted = [...FOCUS_DIMS]
@@ -332,16 +384,18 @@ class RlPolicy {
     const weaknessList = computeWeaknesses(myScores, opponentScores);
     const tacticInfo = actions.map((key) => this.tacticMap[key]).filter(Boolean);
     const opponentSummary = opponentKey ? `对手${opponentKey}` : "对手";
+    const intentInfo = INTENTS.find((item) => item.key === intentKey) || { key: intentKey || "AttackClaim", label: "攻击主张", desc: "针对对方核心主张进行反驳" };
 
     return {
       actions: tacticInfo,
+      intent: intentInfo,
       focus: focusSorted,
       weaknesses: weaknessList,
       opponentLabel: opponentSummary
     };
   }
 
-  updateFromEvaluation({ evaluation, round, topic, debateId, stageKey, stageTitle, replies }) {
+  updateFromEvaluation({ evaluation, round, topic, debateId, stageKey, stageTitle, replies, stateInfo, detectedActions, rewardSignals, curriculumPhase }) {
     if (!this.enabled || !evaluation) return;
     if (this.lastUpdatedRound === round) return;
     this.lastUpdatedRound = round;
@@ -350,6 +404,8 @@ class RlPolicy {
     const focusLr = this.config.rlFocusLearningRate ?? 0.08;
     const alpha = this.config.rlBaselineAlpha ?? 0.1;
     const minProb = this.config.rlMinProb ?? 0.03;
+    const stateWeight = this.config.stateRewardWeight ?? 0.8;
+    const mismatchPenalty = this.config.actionMismatchPenalty ?? 0.6;
 
     const scores = evaluation.scores || {};
     const averages = evaluation.averages || {};
@@ -367,8 +423,26 @@ class RlPolicy {
       const avg = Number(averages[agentKey] || 0);
       const oppAvg = Number(averages[opponentKey] || 0);
       const ruleScore = Number(scores?.[agentKey]?.rule_compliance || 5);
-      let reward = scoreToReward(avg, oppAvg, ruleScore);
-      reward = clamp(reward - duplicatePenalty, -1, 1);
+      const judgeReward = scoreToReward(avg, oppAvg, ruleScore);
+      const signal = rewardSignals ? rewardSignals[agentKey] : null;
+      const baseDebateReward = signal ? (signal.reward - signal.penalty) : 0;
+      let debateReward = baseDebateReward;
+
+      if (curriculumPhase && curriculumPhase < 2) {
+        if (signal?.details?.deflect) debateReward -= 1.2;
+      }
+      if (curriculumPhase && curriculumPhase < 3) {
+        if (signal?.details?.collapse) debateReward += signal?.details?.collapsePenalty || 0;
+      }
+
+      const intentKey = agentState.last_intent ? agentState.last_intent.key : null;
+      const detected = detectedActions ? detectedActions[agentKey] : null;
+      if (intentKey && detected && intentKey !== detected) {
+        debateReward -= mismatchPenalty;
+      }
+
+      let reward = stateWeight * debateReward + (1 - stateWeight) * judgeReward;
+      reward = clamp(reward - duplicatePenalty, -1.2, 1.2);
 
       const baseline = Number(agentState.value || 0);
       const advantage = reward - baseline;
@@ -408,6 +482,17 @@ class RlPolicy {
       }
       agentState.focus = focus;
 
+      const intentProbs = agentState.intent_probs || {};
+      const intentKeys = Object.keys(intentProbs);
+      if (intentKeys.length && intentKey) {
+        for (const key of intentKeys) {
+          const chosen = key === intentKey;
+          const direction = chosen ? (1 - intentProbs[key]) : -intentProbs[key] / Math.max(1, intentKeys.length - 1);
+          intentProbs[key] = clamp(intentProbs[key] + lr * advantage * direction, minProb, 1);
+        }
+        agentState.intent_probs = normalizeProbs(intentProbs, minProb);
+      }
+
       const metrics = this.metrics.agents[agentKey];
       if (metrics) {
         metrics.steps = Number(metrics.steps || 0) + 1;
@@ -427,9 +512,15 @@ class RlPolicy {
       stage_title: stageTitle,
       averages,
       duplicate_reply: identical,
+      state_info: stateInfo,
+      detected_actions: detectedActions,
       actions: {
         A: this.state.agents.A.last_actions,
         B: this.state.agents.B.last_actions
+      },
+      intents: {
+        A: this.state.agents.A.last_intent?.key || null,
+        B: this.state.agents.B.last_intent?.key || null
       },
       rewards: {
         A: this.state.agents.A.last_reward,
@@ -443,6 +534,33 @@ class RlPolicy {
     if (this.log?.appendEvent) {
       this.log.appendEvent("rl_update", logPayload);
     }
+  }
+
+  getStatusSnapshot() {
+    if (!this.enabled || !this.state || !this.state.agents) return null;
+    const buildAgent = (agentKey) => {
+      const agent = this.state.agents[agentKey];
+      if (!agent) return null;
+      const focusSorted = [...FOCUS_DIMS]
+        .map((dim) => ({ ...dim, weight: Number(agent.focus?.[dim.key] || 1) }))
+        .sort((a, b) => b.weight - a.weight)
+        .slice(0, 3)
+        .map((dim) => ({
+          key: dim.key,
+          label: dim.label,
+          weight: Number(dim.weight.toFixed(2))
+        }));
+      return {
+        last_intent: agent.last_intent ? agent.last_intent.key : null,
+        focus: focusSorted,
+        last_reward: Number(agent.last_reward || 0)
+      };
+    };
+    return {
+      A: buildAgent("A"),
+      B: buildAgent("B"),
+      updated_at: this.state.updated_at
+    };
   }
 }
 

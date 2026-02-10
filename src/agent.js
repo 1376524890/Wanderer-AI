@@ -13,6 +13,8 @@ const { LlmClient } = require("./llmClient");
 const { buildDebatePrompts } = require("./prompts");
 const { buildDebateFlow, formatStageLengthGuide, getStageLengthGuide, getStageMaxChars } = require("./workflow");
 const { DebateJudge } = require("./judge");
+const { loadSkills } = require("./skills");
+const { STATES, classifyAction, computeNextState, buildRewardSignals } = require("./debateDynamics");
 const { RlPolicy } = require("./rlPolicy");
 const {
   ensureDir,
@@ -182,6 +184,10 @@ class DebateAgent {
     this.cumulativeScores = { A: 0, B: 0 };
     this.evaluatedRounds = 0;
     this.promptInfo = null;
+    this.debateStates = { A: STATES.Neutral, B: STATES.Neutral };
+    this.lastDetectedActions = { A: null, B: null };
+    this.lastRewardSignals = { A: null, B: null };
+    this.lastRoundReplies = { A: "", B: "" };
 
     const experienceDir = config.experienceDir || config.stateDir;
     ensureDir(experienceDir);
@@ -204,6 +210,7 @@ class DebateAgent {
     this.lastReplyAt = null;
     this.tokenStats = this.loadTokenStats();
     this.debateFlow = buildDebateFlow(config.freeDebateRounds);
+    this.skills = loadSkills(config.skillsPath);
 
     this.lockPath = path.join(config.stateDir, "agent.lock");
     this.lockCleanupRegistered = false;
@@ -211,6 +218,21 @@ class DebateAgent {
 
     this.ensureIdentityFiles();
     this.loadState();
+    this.loadLastTurnReplies();
+  }
+
+  loadLastTurnReplies() {
+    if (!fs.existsSync(this.lastTurnPath)) return;
+    try {
+      const raw = fs.readFileSync(this.lastTurnPath, "utf8");
+      const data = JSON.parse(raw);
+      this.lastRoundReplies = {
+        A: data?.agentA?.reply ? String(data.agentA.reply) : this.lastRoundReplies.A,
+        B: data?.agentB?.reply ? String(data.agentB.reply) : this.lastRoundReplies.B
+      };
+    } catch (err) {
+      // ignore parse errors
+    }
   }
 
   acquireAgentLock() {
@@ -369,6 +391,11 @@ class DebateAgent {
       this.currentScores = { A: null, B: null };
       this.cumulativeScores = { A: 0, B: 0 };
       this.evaluatedRounds = 0;
+      this.debateStates = { A: STATES.Neutral, B: STATES.Neutral };
+      this.lastDetectedActions = { A: null, B: null };
+      this.lastRewardSignals = { A: null, B: null };
+      this.skills = loadSkills(this.config.skillsPath);
+      this.lastRoundReplies = { A: "", B: "" };
     }
 
     const conversationContext = readTail(this.conversationPath, this.config.contextMaxChars);
@@ -473,6 +500,59 @@ class DebateAgent {
       round: nextRound
     });
 
+    const opponentKeyFor = (key) => (key === "A" ? "B" : "A");
+    const prevOpponentReply = (key) => (this.lastRoundReplies ? this.lastRoundReplies[opponentKeyFor(key)] : "");
+
+    const roundContext = {
+      [firstAgent]: {
+        question: prevOpponentReply(firstAgent),
+        reply: agentFirstResult.reply
+      },
+      [secondAgent]: {
+        question: agentFirstResult.reply,
+        reply: agentSecondResult.reply
+      }
+    };
+
+    const detectedActions = {
+      A: classifyAction(roundContext.A || {}),
+      B: classifyAction(roundContext.B || {})
+    };
+
+    const prevStates = { ...this.debateStates };
+    const nextStates = {
+      A: computeNextState({
+        prevState: prevStates.A,
+        question: roundContext.A.question,
+        reply: roundContext.A.reply,
+        skills: this.skills.A
+      }),
+      B: computeNextState({
+        prevState: prevStates.B,
+        question: roundContext.B.question,
+        reply: roundContext.B.reply,
+        skills: this.skills.B
+      })
+    };
+    this.debateStates = nextStates;
+
+    const rewardSignals = {
+      A: buildRewardSignals({
+        prevState: prevStates.A,
+        nextState: nextStates.A,
+        detectedAction: detectedActions.A,
+        skills: this.skills.A
+      }),
+      B: buildRewardSignals({
+        prevState: prevStates.B,
+        nextState: nextStates.B,
+        detectedAction: detectedActions.B,
+        skills: this.skills.B
+      })
+    };
+    this.lastDetectedActions = detectedActions;
+    this.lastRewardSignals = rewardSignals;
+
     if (evaluation) {
       this.currentEvaluation = evaluation;
       this.currentScores = {
@@ -508,7 +588,14 @@ class DebateAgent {
         topic: topicAfterSecond || topicAfterFirst || roundTopic,
         stageKey: debateStep.key,
         stageTitle: debateStep.title,
-        replies
+        replies,
+        stateInfo: {
+          prev: prevStates,
+          next: nextStates
+        },
+        detectedActions,
+        rewardSignals,
+        curriculumPhase: this.config.curriculumPhase
       });
     }
 
@@ -528,6 +615,11 @@ class DebateAgent {
     const resultsByAgent = {
       [agentFirstResult.agentKey]: agentFirstResult,
       [agentSecondResult.agentKey]: agentSecondResult
+    };
+
+    this.lastRoundReplies = {
+      A: resultsByAgent.A ? resultsByAgent.A.reply : this.lastRoundReplies.A,
+      B: resultsByAgent.B ? resultsByAgent.B.reply : this.lastRoundReplies.B
     };
 
     this.applyIdentityUpdate("A", resultsByAgent.A ? resultsByAgent.A.planUpdate : []);
@@ -550,6 +642,9 @@ class DebateAgent {
       agentA: resultsByAgent.A,
       agentB: resultsByAgent.B,
       evaluation: this.currentEvaluation,
+      debate_states: nextStates,
+      detected_actions: detectedActions,
+      reward_signals: rewardSignals,
       cumulativeScores: { ...this.cumulativeScores },
       avgScores: {
         A: this.cumulativeScores.A / this.evaluatedRounds,
@@ -701,7 +796,7 @@ class DebateAgent {
     });
 
     const warnChars = Number(this.config.promptWarnChars || 12000);
-    const maxChars = Number(this.config.promptMaxChars || 15000);
+    const promptMaxChars = Number(this.config.promptMaxChars || 15000);
     let conversationText = trimTailText(conversation || "", this.config.contextMaxChars);
     let experienceText = trimTailText(experience || "", this.config.experienceMaxChars);
     let identityText = trimTailText(identityRaw || "", this.config.identityMaxChars);
@@ -737,10 +832,10 @@ class DebateAgent {
     let trimmed = false;
 
     let guard = 0;
-    while (promptChars > maxChars && guard < 6) {
+    while (promptChars > promptMaxChars && guard < 6) {
       guard += 1;
       trimmed = true;
-      const overflow = promptChars - maxChars;
+      const overflow = promptChars - promptMaxChars;
       if (conversationText.length > 420) {
         const reduce = Math.min(conversationText.length - 420, Math.ceil(overflow * 0.7));
         conversationText = trimTailText(conversationText, Math.max(420, conversationText.length - reduce));
@@ -762,10 +857,10 @@ class DebateAgent {
         agent: agentKey,
         promptChars,
         warnChars,
-        maxChars,
+        maxChars: promptMaxChars,
         trimmed
       });
-      this.log.appendSystemEvent("prompt_warn", `Agent ${agentKey} prompt chars ${promptChars} (warn ${warnChars}, max ${maxChars})`);
+      this.log.appendSystemEvent("prompt_warn", `Agent ${agentKey} prompt chars ${promptChars} (warn ${warnChars}, max ${promptMaxChars})`);
     }
 
     this.promptInfo = {
@@ -774,7 +869,7 @@ class DebateAgent {
       system_chars: systemPrompt.length,
       user_chars: userPrompt.length,
       warn_chars: warnChars,
-      max_chars: maxChars,
+      max_chars: promptMaxChars,
       trimmed,
       at: nowIso()
     };
@@ -980,11 +1075,21 @@ class DebateAgent {
       token_stats: this.tokenStats,
       api_status: llmStatus,
       prompt_info: this.promptInfo,
+      curriculum_phase: this.config.curriculumPhase,
+      reward_mix: {
+        debate_weight: this.config.stateRewardWeight ?? 0.8,
+        judge_weight: 1 - (this.config.stateRewardWeight ?? 0.8)
+      },
+      skills: this.skills,
+      rl_status: this.rl?.getStatusSnapshot ? this.rl.getStatusSnapshot() : null,
       judge: {
         evaluated_rounds: this.evaluatedRounds,
         current_evaluation: this.currentEvaluation,
         current_scores: this.currentScores,
         cumulative_scores: this.cumulativeScores,
+        debate_states: this.debateStates,
+        detected_actions: this.lastDetectedActions,
+        reward_signals: this.lastRewardSignals,
         average_scores: {
           A: avgScoreA,
           B: avgScoreB
