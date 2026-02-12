@@ -154,6 +154,12 @@ class LlmClient {
         const maxTokens = Number.isFinite(options.maxTokens)
           ? options.maxTokens
           : this.config.maxTokens;
+        const presencePenalty = Number.isFinite(options.presencePenalty)
+          ? options.presencePenalty
+          : this.config.presencePenalty;
+        const frequencyPenalty = Number.isFinite(options.frequencyPenalty)
+          ? options.frequencyPenalty
+          : this.config.frequencyPenalty;
         const payload = {
           model: model || this.config.vllmModel,
           messages: [
@@ -164,6 +170,13 @@ class LlmClient {
           top_p: topP,
           max_tokens: maxTokens
         };
+
+        if (Number.isFinite(presencePenalty)) {
+          payload.presence_penalty = presencePenalty;
+        }
+        if (Number.isFinite(frequencyPenalty)) {
+          payload.frequency_penalty = frequencyPenalty;
+        }
 
         if (options.extraBody && Object.keys(options.extraBody).length > 0) {
           payload.extra_body = options.extraBody;

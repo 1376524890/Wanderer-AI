@@ -50,13 +50,21 @@ function getStageLengthGuide(stage, agentKey) {
   return stage.lengthGuide || null;
 }
 
-function buildDebateFlow(freeRounds) {
-  const safeFreeRounds = normalizeFreeRounds(freeRounds);
+function buildDebateFlow(freeRounds, options = {}) {
+  const maxRounds = Number.isFinite(options.freeDebateMaxRounds) && options.freeDebateMaxRounds > 0
+    ? options.freeDebateMaxRounds
+    : freeRounds;
+  const safeFreeRounds = normalizeFreeRounds(maxRounds);
+  const freeDebateTotalChars = Number.isFinite(options.freeDebateTotalChars) ? options.freeDebateTotalChars : 0;
+  const brainstormFlow = "头脑风暴流程：先发散列3个不同角度 → 选择1个最有冲突且可检验的角度 → 落地论点与边界 → 收束回扣对抗点。";
+  const freeDebateRule = freeDebateTotalChars > 0
+    ? `自由辩论由正方先发言，正反方轮流发言。总字数预算：每方${freeDebateTotalChars}字（预算优先，回合数仅为上限）。${brainstormFlow}`
+    : `自由辩论由正方先发言，正反方轮流发言，共${safeFreeRounds}轮（回合数为上限，字数按阶段建议控制，约300字/轮）。${brainstormFlow}`;
   const flow = [
     {
       key: "opening",
       title: "陈词阶段-立论陈词",
-      rule: "正方一辩陈词3分钟，反方一辩陈词3分钟。",
+      rule: "正方一辩陈词3分钟（约900字），反方一辩陈词3分钟（约900字）。",
       order: "A",
       roles: { A: "正方一辩", B: "反方一辩" },
       tasks: {
@@ -72,7 +80,7 @@ function buildDebateFlow(freeRounds) {
     {
       key: "cross_1",
       title: "攻辩阶段-正方二辩提问",
-      rule: "正方二辩提问，反方二辩或三辩回答；提问30秒，回答1分钟。",
+      rule: "正方二辩提问，反方二辩或三辩回答；提问30秒（约150字），回答1分钟（约300字）。",
       order: "A",
       roles: { A: "正方二辩(提问)", B: "反方二辩/三辩(回答)" },
       tasks: {
@@ -88,7 +96,7 @@ function buildDebateFlow(freeRounds) {
     {
       key: "cross_2",
       title: "攻辩阶段-反方二辩提问",
-      rule: "反方二辩提问，正方二辩或三辩回答；提问30秒，回答1分钟。",
+      rule: "反方二辩提问，正方二辩或三辩回答；提问30秒（约150字），回答1分钟（约300字）。",
       order: "B",
       roles: { A: "正方二辩/三辩(回答)", B: "反方二辩(提问)" },
       tasks: {
@@ -104,7 +112,7 @@ function buildDebateFlow(freeRounds) {
     {
       key: "cross_3",
       title: "攻辩阶段-正方三辩提问",
-      rule: "正方三辩提问，反方二辩或三辩回答；提问30秒，回答1分钟。",
+      rule: "正方三辩提问，反方二辩或三辩回答；提问30秒（约150字），回答1分钟（约300字）。",
       order: "A",
       roles: { A: "正方三辩(提问)", B: "反方二辩/三辩(回答)" },
       tasks: {
@@ -120,7 +128,7 @@ function buildDebateFlow(freeRounds) {
     {
       key: "cross_4",
       title: "攻辩阶段-反方三辩提问",
-      rule: "反方三辩提问，正方二辩或三辩回答；提问30秒，回答1分钟。",
+      rule: "反方三辩提问，正方二辩或三辩回答；提问30秒（约150字），回答1分钟（约300字）。",
       order: "B",
       roles: { A: "正方二辩/三辩(回答)", B: "反方三辩(提问)" },
       tasks: {
@@ -136,7 +144,7 @@ function buildDebateFlow(freeRounds) {
     {
       key: "cross_summary",
       title: "攻辩阶段-攻辩小结",
-      rule: "四轮攻辩完毕后，正方一辩与反方一辩各作2分钟攻辩小结。",
+      rule: "四轮攻辩完毕后，正方一辩与反方一辩各作2分钟攻辩小结（约600字）。",
       order: "A",
       roles: { A: "正方一辩(攻辩小结)", B: "反方一辩(攻辩小结)" },
       tasks: {
@@ -155,7 +163,7 @@ function buildDebateFlow(freeRounds) {
     flow.push({
       key: `free_${i + 1}`,
       title: `自由辩论阶段-第${i + 1}轮`,
-      rule: "自由辩论由正方先发言，正反方轮流发言，共8分钟，每方4分钟。",
+      rule: freeDebateRule,
       order: "A",
       roles: { A: "正方自由辩", B: "反方自由辩" },
       tasks: {
@@ -173,7 +181,7 @@ function buildDebateFlow(freeRounds) {
   flow.push({
     key: "closing",
     title: "总结陈词阶段",
-    rule: "反方四辩总结陈词3分钟；正方四辩总结陈词3分钟。",
+    rule: "反方四辩总结陈词3分钟（约900字）；正方四辩总结陈词3分钟（约900字）。",
     order: "B",
     roles: { A: "正方四辩(总结陈词)", B: "反方四辩(总结陈词)" },
       tasks: {

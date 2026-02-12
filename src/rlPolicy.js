@@ -23,7 +23,17 @@ const DEFAULT_TACTICS = [
   { key: "framework_reframe", label: "框架重述", desc: "重构问题框架，强调己方价值" },
   { key: "priority_tradeoff", label: "价值权衡", desc: "承认代价并给出权衡路径" },
   { key: "steelman_refute", label: "先强后破", desc: "先概括对方最强论点再精准反驳" },
-  { key: "synthesis", label: "综合归纳", desc: "总结要点并回扣核心主张" }
+  { key: "synthesis", label: "综合归纳", desc: "总结要点并回扣核心主张" },
+  { key: "stakeholder_shift", label: "利益相关者切换", desc: "从不同群体视角评估影响" },
+  { key: "timeline_split", label: "时间尺度对比", desc: "区分短期/长期/拐点效应" },
+  { key: "boundary_case", label: "边界情形", desc: "用极端或边界案例检验主张" },
+  { key: "counterfactual", label: "反事实推演", desc: "构造相反情景测试论点稳健性" },
+  { key: "operationalization", label: "指标操作化", desc: "定义口径与衡量方法提升可验证性" },
+  { key: "incentive_design", label: "激励机制", desc: "分析博弈与激励对行为的影响" },
+  { key: "policy_toolkit", label: "政策工具组合", desc: "比较法制/经济/技术等多工具方案" },
+  { key: "distributional_impact", label: "分配效应", desc: "衡量收益与成本的分配不均" },
+  { key: "feasibility_check", label: "可行性校验", desc: "检视执行成本、路径与约束" },
+  { key: "robustness_test", label: "稳健性测试", desc: "对不同场景与假设进行稳健性检验" }
 ];
 
 const INTENTS = [

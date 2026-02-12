@@ -111,6 +111,38 @@ function formatUtc8(date = new Date()) {
   return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss} UTC+8`;
 }
 
+function normalizeForSimilarity(text) {
+  if (!text) return "";
+  return String(text)
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[^\u4e00-\u9fa5a-z0-9]/gi, "");
+}
+
+function buildNgrams(text, n = 2, max = 400) {
+  const source = normalizeForSimilarity(text);
+  if (!source || source.length < n) return new Set();
+  const grams = new Set();
+  for (let i = 0; i <= source.length - n; i += 1) {
+    grams.add(source.slice(i, i + n));
+    if (grams.size >= max) break;
+  }
+  return grams;
+}
+
+function textSimilarity(a, b) {
+  const gramsA = buildNgrams(a);
+  const gramsB = buildNgrams(b);
+  if (!gramsA.size || !gramsB.size) return 0;
+  let intersection = 0;
+  for (const gram of gramsA) {
+    if (gramsB.has(gram)) intersection += 1;
+  }
+  const union = gramsA.size + gramsB.size - intersection;
+  if (!union) return 0;
+  return intersection / union;
+}
+
 module.exports = {
   parseBool,
   parseIntValue,
@@ -123,5 +155,8 @@ module.exports = {
   safeSnippet,
   countExperienceItems,
   compressExperienceSection,
-  formatUtc8
+  formatUtc8,
+  normalizeForSimilarity,
+  buildNgrams,
+  textSimilarity
 };

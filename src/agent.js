@@ -24,7 +24,8 @@ const {
   safeJsonExtract,
   formatUtc8,
   countExperienceItems,
-  compressExperienceSection
+  compressExperienceSection,
+  textSimilarity
 } = require("./utils");
 
 function sleep(seconds) {
@@ -132,6 +133,10 @@ function trimTailText(text, maxChars) {
   return raw.slice(-maxChars).trim();
 }
 
+function isFreeDebateStageKey(stageKey) {
+  return typeof stageKey === "string" && stageKey.startsWith("free_");
+}
+
 function splitExperienceSections(text) {
   const lines = String(text || "").split(/\r?\n/);
   const sections = [];
@@ -209,8 +214,16 @@ class DebateAgent {
     this.topicHistory = [];
     this.lastReplyAt = null;
     this.tokenStats = this.loadTokenStats();
-    this.debateFlow = buildDebateFlow(config.freeDebateRounds);
+    this.freeDebateBudget = Number(config.freeDebateTotalChars || 0);
+    const configuredFreeMax = Number(config.freeDebateMaxRounds || 0);
+    this.freeDebateMaxRounds = configuredFreeMax > 0 ? configuredFreeMax : Number(config.freeDebateRounds || 4);
+    this.freeDebateUsage = { A: 0, B: 0 };
+    this.debateFlow = buildDebateFlow(this.freeDebateMaxRounds, {
+      freeDebateTotalChars: this.freeDebateBudget,
+      freeDebateMaxRounds: this.freeDebateMaxRounds
+    });
     this.skills = loadSkills(config.skillsPath);
+    this.lastRepeatAlerts = { A: null, B: null };
 
     this.lockPath = path.join(config.stateDir, "agent.lock");
     this.lockCleanupRegistered = false;
@@ -349,6 +362,12 @@ class DebateAgent {
       this.topic = typeof data.topic === "string" ? data.topic : this.topic;
       this.topicHistory = Array.isArray(data.topic_history) ? data.topic_history : [];
       this.lastReplyAt = data.last_reply_at || this.lastReplyAt;
+      if (data.free_debate_usage && typeof data.free_debate_usage === "object") {
+        this.freeDebateUsage = {
+          A: Number(data.free_debate_usage.A || 0),
+          B: Number(data.free_debate_usage.B || 0)
+        };
+      }
     } catch (err) {
       // ignore
     }
@@ -396,6 +415,8 @@ class DebateAgent {
       this.lastRewardSignals = { A: null, B: null };
       this.skills = loadSkills(this.config.skillsPath);
       this.lastRoundReplies = { A: "", B: "" };
+      this.freeDebateUsage = { A: 0, B: 0 };
+      this.lastRepeatAlerts = { A: null, B: null };
     }
 
     const conversationContext = readTail(this.conversationPath, this.config.contextMaxChars);
@@ -411,8 +432,14 @@ class DebateAgent {
 
     const allowIdentityUpdateAlways = true;
 
-    const firstAgentMaxChars = getStageMaxChars(debateStep, firstAgent);
-    const secondAgentMaxChars = getStageMaxChars(debateStep, secondAgent);
+    const firstGuide = this.getDynamicStageGuide(debateStep, firstAgent);
+    const secondGuide = this.getDynamicStageGuide(debateStep, secondAgent);
+    const firstAgentMaxChars = firstGuide.maxChars;
+    const secondAgentMaxChars = secondGuide.maxChars;
+    const firstAgentLengthGuide = firstGuide.lengthGuide;
+    const secondAgentLengthGuide = secondGuide.lengthGuide;
+    const firstAgentBudgetInfo = firstGuide.budgetInfo;
+    const secondAgentBudgetInfo = secondGuide.budgetInfo;
 
     const agentFirstResult = await this.queryAgent({
       agentKey: firstAgent,
@@ -425,7 +452,7 @@ class DebateAgent {
       stageKey: debateStep.key,
       stageTitle: debateStep.title,
       stageRule: debateStep.rule,
-      lengthGuide: getStageLengthGuide(debateStep, firstAgent),
+      lengthGuide: firstAgentLengthGuide,
       role: debateStep.roles[firstAgent],
       task: debateStep.tasks[firstAgent],
       speakerOrder: "first",
@@ -436,6 +463,8 @@ class DebateAgent {
       conversation: conversationContext,
       evaluation: this.currentEvaluation,
       maxChars: firstAgentMaxChars,
+      freeDebateBudget: firstAgentBudgetInfo,
+      diversityHint: this.lastRepeatAlerts[firstAgent],
       myScores: this.currentScores[firstAgent],
       opponentScores: this.currentScores[secondAgent]
     });
@@ -465,7 +494,7 @@ class DebateAgent {
       stageKey: debateStep.key,
       stageTitle: debateStep.title,
       stageRule: debateStep.rule,
-      lengthGuide: getStageLengthGuide(debateStep, secondAgent),
+      lengthGuide: secondAgentLengthGuide,
       role: debateStep.roles[secondAgent],
       task: debateStep.tasks[secondAgent],
       speakerOrder: "second",
@@ -476,6 +505,8 @@ class DebateAgent {
       conversation: conversationAfterFirst,
       evaluation: this.currentEvaluation,
       maxChars: secondAgentMaxChars,
+      freeDebateBudget: secondAgentBudgetInfo,
+      diversityHint: this.lastRepeatAlerts[secondAgent],
       myScores: this.currentScores[secondAgent],
       opponentScores: this.currentScores[firstAgent]
     });
@@ -487,6 +518,11 @@ class DebateAgent {
     }
 
     const topicAfterSecond = this.pickTopic(topicAfterFirst, agentSecondResult.topic, allowTopicChange);
+
+    if (isFreeDebateStageKey(debateStep.key)) {
+      this.freeDebateUsage[firstAgent] = Number(this.freeDebateUsage[firstAgent] || 0) + (agentFirstResult.reply || "").length;
+      this.freeDebateUsage[secondAgent] = Number(this.freeDebateUsage[secondAgent] || 0) + (agentSecondResult.reply || "").length;
+    }
 
     const evaluation = await this.judge.evaluateRound({
       topic: topicAfterSecond,
@@ -552,6 +588,49 @@ class DebateAgent {
     };
     this.lastDetectedActions = detectedActions;
     this.lastRewardSignals = rewardSignals;
+
+    const repliesByAgent = {
+      A: agentFirstResult.agentKey === "A" ? agentFirstResult.reply : agentSecondResult.reply,
+      B: agentFirstResult.agentKey === "B" ? agentFirstResult.reply : agentSecondResult.reply
+    };
+    const repeatThreshold = Number(this.config.repeatSimThreshold || 0.92);
+    const repeatPenalty = Number(this.config.repeatPenalty || 0.35);
+    const sameRoundPenalty = Number(this.config.repeatSameRoundPenalty || 0.4);
+    const simSameRound = textSimilarity(repliesByAgent.A, repliesByAgent.B);
+    const simSelfA = textSimilarity(repliesByAgent.A, this.lastRoundReplies.A);
+    const simSelfB = textSimilarity(repliesByAgent.B, this.lastRoundReplies.B);
+    const simOppA = textSimilarity(repliesByAgent.A, this.lastRoundReplies.B);
+    const simOppB = textSimilarity(repliesByAgent.B, this.lastRoundReplies.A);
+
+    const buildRepeatAlert = (parts) => parts.length ? `${parts.join("；")}。请更换论据/结构，避免复述。` : null;
+
+    const repeatAlerts = { A: null, B: null };
+    const applyRepeatPenalty = (agentKey, selfSim, oppSim) => {
+      let penalty = 0;
+      const hints = [];
+      if (selfSim >= repeatThreshold) {
+        penalty = Math.max(penalty, repeatPenalty);
+        hints.push("与你上一轮高度重复");
+      }
+      if (oppSim >= repeatThreshold) {
+        penalty = Math.max(penalty, repeatPenalty * 0.6);
+        hints.push("与对方上一轮高度相似");
+      }
+      if (simSameRound >= repeatThreshold) {
+        penalty = Math.max(penalty, sameRoundPenalty);
+        hints.push("与对方本轮高度相似");
+      }
+      if (penalty > 0 && rewardSignals[agentKey]) {
+        rewardSignals[agentKey].penalty += penalty;
+        rewardSignals[agentKey].details.repeat = true;
+        rewardSignals[agentKey].details.repeatPenalty = (rewardSignals[agentKey].details.repeatPenalty || 0) + penalty;
+        repeatAlerts[agentKey] = buildRepeatAlert(hints);
+      }
+    };
+
+    applyRepeatPenalty("A", simSelfA, simOppA);
+    applyRepeatPenalty("B", simSelfB, simOppB);
+    this.lastRepeatAlerts = repeatAlerts;
 
     if (evaluation) {
       this.currentEvaluation = evaluation;
@@ -631,7 +710,19 @@ class DebateAgent {
       this.recordTopic(resolvedTopic);
     }
     this.topic = resolvedTopic;
-    this.debateRound = isDebateEnd ? 0 : nextDebateRound;
+    let nextDebateRoundValue = isDebateEnd ? 0 : nextDebateRound;
+    const freeBudgetReached = isFreeDebateStageKey(debateStep.key)
+      && this.freeDebateBudget
+      && this.freeDebateUsage.A >= this.freeDebateBudget
+      && this.freeDebateUsage.B >= this.freeDebateBudget;
+    if (!isDebateEnd && freeBudgetReached) {
+      nextDebateRoundValue = Math.max(0, this.debateFlow.length - 1);
+      this.log.appendSystemEvent(
+        "free_debate_budget_reached",
+        `Free debate budget reached at round ${nextRound}, jump to closing next.`
+      );
+    }
+    this.debateRound = nextDebateRoundValue;
 
     const lastTurn = {
       round: nextRound,
@@ -645,6 +736,8 @@ class DebateAgent {
       debate_states: nextStates,
       detected_actions: detectedActions,
       reward_signals: rewardSignals,
+      free_debate_usage: { ...this.freeDebateUsage },
+      repeat_alerts: this.lastRepeatAlerts,
       cumulativeScores: { ...this.cumulativeScores },
       avgScores: {
         A: this.cumulativeScores.A / this.evaluatedRounds,
@@ -782,6 +875,8 @@ class DebateAgent {
     conversation,
     evaluation,
     maxChars,
+    freeDebateBudget,
+    diversityHint,
     myScores,
     opponentScores
   }) {
@@ -801,6 +896,7 @@ class DebateAgent {
     let experienceText = trimTailText(experience || "", this.config.experienceMaxChars);
     let identityText = trimTailText(identityRaw || "", this.config.identityMaxChars);
 
+    const maxTokens = this.computeMaxTokens(maxChars);
     const buildPrompt = () => buildDebatePrompts({
       agentKey,
       round,
@@ -824,7 +920,10 @@ class DebateAgent {
       evaluation,
       myScores,
       opponentScores,
-      rlContext
+      rlContext,
+      maxTokens,
+      diversityHint,
+      freeDebateBudget
     });
 
     let { systemPrompt, userPrompt } = buildPrompt();
@@ -880,7 +979,7 @@ class DebateAgent {
     const model = this.getModelForAgent(agentKey);
 
     try {
-      const result = await this.llm.chat(systemPrompt, userPrompt, { model });
+      const result = await this.llm.chat(systemPrompt, userPrompt, { model, maxTokens });
       rawResponse = result.content || "";
       llmUsage = result.usage || null;
     } catch (err) {
@@ -1076,6 +1175,15 @@ class DebateAgent {
       api_status: llmStatus,
       prompt_info: this.promptInfo,
       curriculum_phase: this.config.curriculumPhase,
+      free_debate_budget: this.freeDebateBudget || null,
+      free_debate_usage: this.freeDebateUsage,
+      free_debate_remaining: this.freeDebateBudget
+        ? {
+          A: Math.max(0, this.freeDebateBudget - (this.freeDebateUsage.A || 0)),
+          B: Math.max(0, this.freeDebateBudget - (this.freeDebateUsage.B || 0))
+        }
+        : null,
+      repeat_alerts: this.lastRepeatAlerts,
       reward_mix: {
         debate_weight: this.config.stateRewardWeight ?? 0.8,
         judge_weight: 1 - (this.config.stateRewardWeight ?? 0.8)
@@ -1159,6 +1267,59 @@ class DebateAgent {
       rule: step.rule || "-",
       lengthGuide: formatStageLengthGuide(step)
     };
+  }
+
+  getFreeDebateBudgetInfo(agentKey) {
+    if (!this.freeDebateBudget || this.freeDebateBudget <= 0) return null;
+    const used = Number(this.freeDebateUsage?.[agentKey] || 0);
+    const remaining = Math.max(0, this.freeDebateBudget - used);
+    const note = remaining <= 0 ? "预算已用尽，建议以简短收束为主" : "";
+    return { total: this.freeDebateBudget, used, remaining, note };
+  }
+
+  getDynamicStageGuide(stage, agentKey) {
+    const baseGuide = getStageLengthGuide(stage, agentKey);
+    const baseMaxChars = getStageMaxChars(stage, agentKey);
+    if (!stage || !isFreeDebateStageKey(stage.key) || !this.freeDebateBudget) {
+      return { lengthGuide: baseGuide, maxChars: baseMaxChars, budgetInfo: null };
+    }
+
+    const budgetInfo = this.getFreeDebateBudgetInfo(agentKey);
+    const minFloor = Math.max(40, Number(this.config.freeDebateMinChars || 120));
+    const remaining = budgetInfo ? budgetInfo.remaining : 0;
+    let maxChars = baseMaxChars || minFloor;
+    if (remaining > 0) {
+      maxChars = Math.min(maxChars, remaining);
+    } else if (maxChars < minFloor) {
+      maxChars = minFloor;
+    }
+
+    if (maxChars < 40) maxChars = 40;
+    let minChars = Math.floor(maxChars * 0.8);
+    if (minChars < 30) minChars = Math.floor(maxChars * 0.6);
+    if (minChars < 20) minChars = Math.min(20, maxChars);
+    if (minChars > maxChars) minChars = Math.max(10, Math.floor(maxChars * 0.5));
+
+    const lengthGuide = {
+      min: minChars,
+      max: maxChars,
+      hint: remaining > 0 ? "自由辩预算控制" : "预算已用尽，尽量简短",
+      unit: "字"
+    };
+
+    return { lengthGuide, maxChars, budgetInfo };
+  }
+
+  computeMaxTokens(maxChars) {
+    const base = Number(this.config.maxTokens || 0);
+    const minTokens = Number(this.config.minTokens || 64);
+    const ratio = Number(this.config.tokensPerChar || 1.2);
+    if (maxChars && maxChars > 0 && Number.isFinite(ratio)) {
+      const estimate = Math.ceil(maxChars * ratio);
+      const clamped = Math.max(minTokens, estimate);
+      return base > 0 ? Math.min(base, clamped) : clamped;
+    }
+    return base > 0 ? base : undefined;
   }
 
   getModelForAgent(agentKey) {
